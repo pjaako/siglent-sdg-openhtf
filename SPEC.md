@@ -56,10 +56,10 @@ tools/probe.py                      hardware probe (written here, run only by th
 - `pyproject.toml`: build backend hatchling; `name = "siglent-sdg-openhtf"`, `requires-python = ">=3.13"`,
   dependencies `openhtf>=1.6.1,<2`, `pyvisa>=1.14`, `pyvisa-py>=0.7`; `[project.optional-dependencies] usb = ["pyusb"]`;
   `[dependency-groups] dev = ["pytest", "mypy"]`; license MIT; `[tool.pytest.ini_options] testpaths = ["tests"]`;
-  `[tool.mypy] strict = true, files = ["src", "tests", "example_test.py", "tools"]`, with
-  `[[tool.mypy.overrides]] module = ["openhtf", "openhtf.*", "pyvisa", "pyvisa.*"] ignore_missing_imports = true`
-  and `module = ["tests.*", "example_test", "test_*"] disallow_untyped_decorators = false` (OpenHTF decorators are untyped;
-  if a narrower override works, use it).
+  `[tool.mypy] strict = true, files = ["src", "tests"]` (T5 adds `"example_test.py"` and `"tools"`; mypy fails on a
+  missing path), overrides `module = ["openhtf", "openhtf.*", "pyvisa", "pyvisa.*"] ignore_missing_imports = true` and
+  `module = ["tests.*", "example_test"] disallow_untyped_decorators = false` (OpenHTF decorators are untyped; `tests/`
+  is a package with `__init__.py` so the `tests.*` pattern applies).
 - `uv.lock` is committed. `uv sync --all-extras --dev` must work offline-tolerant (no custom indexes).
 - CI (`.github/workflows/ci.yml`): `astral-sh/setup-uv`, Python 3.13, `uv sync --all-extras --dev`,
   `uv run pytest -q`, `uv run mypy`.
