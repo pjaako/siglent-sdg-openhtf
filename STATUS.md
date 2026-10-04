@@ -3,12 +3,12 @@
 Handoff state for whoever picks this up next, human or agent. Keep it current; it is committed.
 Secrets (real IP, serial number, probe dumps) never go here; they live in the git-ignored `HANDOFF.md`.
 
-## Where we are (2026-10-04, evening)
+## Where we are (2026-10-05)
 
-**v1 core is complete against the fake and waits for the first hardware session.** 464 tests, mypy
-strict clean, `example_test.py --fake` passes. Nothing has touched a real generator yet. Next action is
-the owner's: give an agent access to the SDG2042X and run `tools/probe.py` (see "Hardware access").
-
+**The first hardware session is done; v1 core works on the real SDG2042X (firmware 2.01.01.23R7, VXI-11).**
+`tools/probe.py` (plain and `--risky`) and `example_test.py --resource <ip>` ran on the generator from a
+local session, branch `hardware-session-1`. Measured facts: `SPEC-hardware-1.md`; verbatim transcript:
+`tests/data/hardware_session_1.txt`; T6 folds them into the fake, the validator and README.
 
 - Research done: no OpenHTF plug exists for the SDG2000X family; the design mirrors `rigol-dho-openhtf`.
 - Official programming guide PG02-E05C is in `docs/` (PDF + text). It is the only source of SCPI.
@@ -33,48 +33,33 @@ the owner's: give an agent access to the SDG2042X and run `tools/probe.py` (see 
 | T4 | `plug.py` + `tests/test_plug.py` | done |
 | T5 | `example_test.py`, `tools/probe.py`, `tests/test_examples.py`, README usage | done |
 | R1 | Review fix-up round (validation ranges, limits at numeric load, closed-plug errors, USB preference) | done |
-| STOP | First hardware session: `tools/probe.py` and `example_test.py` on the SDG2042X, from a local session on the LAN | **next: local session (see Hardware access)** |
-| T6 | Fold hardware findings into the fake, README "Things the manual does not tell you", tolerances | after STOP |
-| T7 | `SPEC-station.md` → `examples/station_demo.py` with rigol-dho-openhtf | after T6 |
+| STOP | First hardware session: `tools/probe.py` and `example_test.py` on the SDG2042X, from a local session on the LAN | done 2026-10-05 |
+| T6 | `SPEC-hardware-1.md`: hardware findings into the fake, validator, tolerances, README | done, accepted on hardware |
+| T7 | `SPEC-station.md` → `examples/station_demo.py` with rigol-dho-openhtf | **next** |
 | later | SPEC-arb, SPEC-modulation, SPEC-counter-sync | each needs a hardware session |
 
 ## Hardware access
 
-**Decision (2026-10-04): the first hardware session runs in a local Claude Code session on a machine on
-the generator's LAN.** A cloud session cannot reach the generator: the cloud container only passes
-HTTPS on port 443 through an inspecting egress gateway; raw TCP (port 5025) and non-TLS tunnels are
-blocked by design, which was tested with a forwarded port and ruled out. PR #1
-(https://github.com/pjaako/siglent-sdg-openhtf/pull/1) stays watched by the cloud owner agent; the owner merges.
+Hardware sessions run in a local Claude Code session on a machine on the generator's LAN (a cloud session
+cannot reach it: only HTTPS leaves the cloud container). The real address and serial are in the git-ignored
+`HANDOFF.md`; raw probe reports are in the git-ignored `dumps/`.
 
-Kickoff for the local session (agent or human), on the LAN machine:
 ```bash
-git clone https://github.com/pjaako/siglent-sdg-openhtf && cd siglent-sdg-openhtf
-git checkout claude/modest-carson-349c1k
 uv sync --all-extras --dev && uv run pytest -q && uv run mypy      # must be green before touching hardware
-uv run python tools/probe.py --resource 'TCPIP0::192.0.2.10::5025::SOCKET'   # real IP instead of 192.0.2.10
-# read dumps/probe-*.md; if the generator survived everything, once more with --risky (SYST:ERR?, *CLS)
+uv run python tools/probe.py --resource 'TCPIP0::192.0.2.10::inst0::INSTR'   # real IP instead of 192.0.2.10
 uv run python example_test.py --resource 192.0.2.10
 ```
-The probe only sends PG02-documented commands (the two `--risky` ones excepted), never changes LAN
-settings, and ends with both outputs off. Keep the power switch within reach for `--risky`. Expect the
-first `example_test.py` run to fail if real replies differ from the PG02 examples (for instance a bare
-`MAX_OUTPUT_AMP` token or `AMPVRMS` fields); the probe report shows the raw replies either way.
 
-Then T6: with the probe report in hand, write `SPEC-hardware-1.md` (Rigol SPEC template, "measured
-facts" section filled from the report, real address and serial replaced by placeholders) and delegate
-to a coder: fake defaults, key sets per WVTP, number formats, tolerances, `parse_reply` tolerance if a
-dangling key is real; README "Facts (measured on the generator)" and "Things the manual does not tell
-you"; firmware version in README's first paragraph. Real addresses, serial and the dumps stay in
-git-ignored `HANDOFF.md` / `dumps/`. Commit with the attribution lines from AGENTS.md and push to this branch.
+Use VXI-11. Port 5025 (raw socket, PG02 §1.2.4) refused the connection on this unit. The probe starts with
+`*RST`, so the generator's previous settings are lost; it ends with both outputs off. Check the address
+with a single `*IDN?` first: other Siglent instruments on the same LAN answer SCPI too.
 
 ## Open questions
 
-- Does the SDG2042X accept `1E-06`-style exponents on write? (`format_value` uses `.9G`.)
-- Does `C1:BSWV?` on real firmware include `MAX_OUTPUT_AMP` (PG02 §3.3 lists it in the response format
-  without a value)?
-- Does `SYST:ERR?` exist on this firmware? It is not in PG02. Probe item 11, risky.
 - How to import `rigol-dho-openhtf` for the station demo (it has no `pyproject.toml`).
-- Does `C1:BSWV?` echo `AMPVRMS`/`AMPDBM` (PG02 §3.3 response format lists `AMPVRMS`, the §3.4 example
-  does not)? Until measured, `apply_setup` with `verify=True` reports those keys as "not echoed"; use `AMP`.
-- Does the generator reject `HLEV` below the current `LLEV`? The fake assumes so (hypothesis); the plug
-  writes `HLEV` then `LLEV`.
+- Not modelled or not measured in session 1 (README "Things the manual does not tell you",
+  `SPEC-hardware-1.md` addendum): the load rescale for loads other than 50 ohm, the PULSE width limit with
+  long edges, the level window above 20 MHz at a numeric load, SDG2082X/SDG2122X limits, USB.
+- Is the raw socket on port 5025 switched off by a setting or missing in firmware 2.01.01.23R7?
+- Nothing was measured at the BNC connectors: session 1 verified the read-back, not the signal. T7 (scope
+  on the output) closes that.

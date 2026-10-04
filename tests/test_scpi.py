@@ -111,7 +111,8 @@ def test_channel_name_rejects(channel: int) -> None:
         (0.01, "0.01"),
         (1e-6, "1E-06"),  # exponent acceptance on write is a hardware item
         (100e6, "100000000"),
-        (1234.5678901, "1234.56789"),  # .9G keeps 9 significant digits: a hypothesis, see STATUS open questions
+        (1234.5678901, "1234.56789"),  # .10G keeps 10 significant digits (measured, hardware session 1)
+        (12345678.123456, "12345678.12"),
         ("HZ", "HZ"),
         ("SINE", "SINE"),
     ],
@@ -312,19 +313,23 @@ def test_typed_fields() -> None:
 @pytest.mark.parametrize(
     ("key", "sent", "got", "expected"),
     [
-        ("AMP", 2, 2.0005, True),  # hypothesis until hardware session 1 (ABS_TOL 1e-3)
+        ("AMP", 2, 2.0005, False),  # a changed value must not match: ABS_TOL 1e-6, REL_TOL 1e-5
+        ("AMP", 1.23456789, 1.23457, True),  # the generator echoes 6 significant digits
+        ("AMP", 0.0015, 0.002, False),  # a clamped value is a mismatch
         ("AMP", 2, 2.01, False),
         ("AMP", 2.0, 2.0, True),
-        ("OFST", 0.0, 0.0005, True),
+        ("OFST", 0.0, 0.0005, False),
         ("OFST", 0.0, 0.01, False),
-        ("PHSE", 12.345, 12.34, True),  # ABS_TOL 1e-2
+        ("PHSE", 12.345, 12.34, False),  # ABS_TOL 1e-6
+        ("PHSE", 12.345, 12.345, True),
         ("PHSE", 12.345, 12.5, False),
-        ("DUTY", 50, 50.005, True),
+        ("DUTY", 50, 50.005, False),
         ("SYM", 50, 50.5, False),
         ("FRQ", 1000, 1000.0, True),
         ("FRQ", 1000.0, 1000.0, True),
         ("FRQ", 1000, 1001.0, False),
-        ("FRQ", 1e6, 1e6 * (1 + 5e-7), True),  # REL_TOL 1e-6
+        ("FRQ", 1e6, 1e6 * (1 + 5e-10), True),  # REL_TOL 1e-9
+        ("FRQ", 1e6, 1e6 * (1 + 5e-7), False),
         ("FRQ", 1e6, 1e6 * (1 + 5e-6), False),
         ("FRQ", 1000, 0.0, False),
         ("STATE", True, "ON", True),
@@ -353,11 +358,12 @@ def test_values_match(key: str, sent: object, got: float | str, expected: bool) 
 
 
 def test_tolerance_tables() -> None:
-    for key in ("AMP", "AMPVRMS", "OFST", "HLEV", "LLEV", "STDEV", "MEAN", "MAX_OUTPUT_AMP"):
-        assert ABS_TOL[key] == 1e-3
-    for key in ("PHSE", "DUTY", "SYM"):
-        assert ABS_TOL[key] == 1e-2
+    for key in ("AMP", "AMPVRMS", "AMPDBM", "OFST", "HLEV", "LLEV", "STDEV", "MEAN", "PHSE", "DUTY", "SYM"):
+        assert ABS_TOL[key] == 1e-6
+    assert "MAX_OUTPUT_AMP" not in ABS_TOL
     assert "FRQ" not in ABS_TOL
+    assert scpi.DEFAULT_REL_TOL == 1e-5
+    assert scpi.REL_TOL == {"FRQ": 1e-9, "BANDWIDTH": 1e-9}
 
 
 # --- order_setup -----------------------------------------------------------------------------------------
@@ -546,7 +552,9 @@ def test_validate_frq_limit_sdg2042x() -> None:
     validate_setup({"C1": {"BSWV": {"WVTP": "SINE", "FRQ": 40e6}}}, limits)  # at the limit
     with pytest.raises(ValueError, match="FRQ"):
         validate_setup({"C1": {"BSWV": {"WVTP": "SQUARE", "FRQ": 30e6}}}, limits)
-    validate_setup({"C1": {"BSWV": {"WVTP": "ARB", "FRQ": 50e6}}}, limits)  # no table entry = no check
+    with pytest.raises(ValueError, match="FRQ"):
+        validate_setup({"C1": {"BSWV": {"WVTP": "ARB", "FRQ": 30e6}}}, limits)  # ARB 20 MHz, measured
+    validate_setup({"C1": {"BSWV": {"WVTP": "ARB", "FRQ": 20e6}}}, limits)
     validate_setup({"C1": {"BSWV": {"FRQ": 50e6}}}, limits)  # type unknown = no check
 
 
@@ -570,6 +578,46 @@ def test_validate_amp_limit_hiz_and_50() -> None:
     validate_setup({"C1": {"OUTP": {"LOAD": 50}}, "C2": {"BSWV": {"AMP": 15.0}}}, limits)
 
 
+def test_validate_amp_minimum_and_k_factor() -> None:
+    limits = models.limits_for("SDG2042X")
+    with pytest.raises(ValueError, match="C1 BSWV AMP"):
+        validate_setup({"C1": {"BSWV": {"AMP": 0.0015}}}, limits)  # PG02 §3.4; measured minimum 0.002 Vpp
+    validate_setup({"C1": {"BSWV": {"AMP": 0.002}}}, limits)
+    validate_setup({"C1": {"OUTP": {"LOAD": 75}, "BSWV": {"AMP": 12.0}}}, limits)  # 20 * 75/125
+    with pytest.raises(ValueError, match="AMP"):
+        validate_setup({"C1": {"OUTP": {"LOAD": 75}, "BSWV": {"AMP": 12.5}}}, limits)
+    validate_setup({"C1": {"OUTP": {"LOAD": 100000}, "BSWV": {"AMP": 19.99}}}, limits)
+    with pytest.raises(ValueError, match="AMP"):
+        validate_setup({"C1": {"OUTP": {"LOAD": 100000}, "BSWV": {"AMP": 20.0}}}, limits)
+
+
+def test_validate_offset_with_amp_in_the_same_setup() -> None:
+    limits = models.limits_for("SDG2042X")
+    validate_setup({"C1": {"BSWV": {"AMP": 4.0, "OFST": 8.0}}}, limits)  # 8 + 2 = 10
+    with pytest.raises(ValueError, match="C1 BSWV OFST"):
+        validate_setup({"C1": {"BSWV": {"AMP": 4.0, "OFST": 8.5}}}, limits)
+    with pytest.raises(ValueError, match="OFST"):
+        validate_setup({"C1": {"OUTP": {"LOAD": 50}, "BSWV": {"AMP": 4.0, "OFST": 3.5}}}, limits)  # 3.5 + 2 > 5
+
+
+def test_validate_level_limits() -> None:
+    limits = models.limits_for("SDG2042X")
+    validate_setup({"C1": {"BSWV": {"HLEV": 10.0, "LLEV": -10.0}}}, limits)
+    with pytest.raises(ValueError, match="C1 BSWV HLEV"):
+        validate_setup({"C1": {"BSWV": {"HLEV": 10.5}}}, limits)
+    with pytest.raises(ValueError, match="C1 BSWV LLEV"):
+        validate_setup({"C1": {"BSWV": {"LLEV": -10.5}}}, limits)
+    with pytest.raises(ValueError, match="HLEV"):
+        validate_setup({"C1": {"OUTP": {"LOAD": 50}, "BSWV": {"HLEV": 5.5}}}, limits)
+    with pytest.raises(ValueError, match="LLEV"):
+        validate_setup({"C1": {"OUTP": {"LOAD": 50}, "BSWV": {"LLEV": -5.5}}}, limits)
+    validate_setup({"C1": {"BSWV": {"HLEV": 1.002, "LLEV": 1.0}}}, limits)  # gap of 0.002
+    with pytest.raises(ValueError, match="HLEV"):
+        validate_setup({"C1": {"BSWV": {"HLEV": 1.001, "LLEV": 1.0}}}, limits)
+    with pytest.raises(ValueError, match="HLEV"):
+        validate_setup({"C1": {"BSWV": {"HLEV": -1.0, "LLEV": 1.0}}}, limits)
+
+
 def test_validate_offset_limit_hiz_and_numeric_load() -> None:
     limits = models.limits_for("SDG2042X")  # max_offset_v_hiz = 10
     validate_setup({"C1": {"BSWV": {"OFST": 10.0}}}, limits)
@@ -579,12 +627,13 @@ def test_validate_offset_limit_hiz_and_numeric_load() -> None:
         validate_setup({"C1": {"BSWV": {"OFST": 10.5}}}, limits)
     with pytest.raises(ValueError, match="OFST"):
         validate_setup({"C1": {"BSWV": {"OFST": -10.5}}}, limits)
-    # hypothesis: half the HiZ limit at a numeric load
+    # measured: the limit is 10*k with k = LOAD/(LOAD+50), 5 V at 50 ohm
     validate_setup({"C1": {"OUTP": {"LOAD": 50}, "BSWV": {"OFST": 5.0}}}, limits)
     with pytest.raises(ValueError, match="OFST"):
         validate_setup({"C1": {"OUTP": {"LOAD": 50}, "BSWV": {"OFST": 5.5}}}, limits)
+    validate_setup({"C1": {"OUTP": {"LOAD": 1000}, "BSWV": {"OFST": -6.0}}}, limits)  # k = 0.952
     with pytest.raises(ValueError, match="OFST"):
-        validate_setup({"C1": {"OUTP": {"LOAD": 1000}, "BSWV": {"OFST": -6.0}}}, limits)
+        validate_setup({"C1": {"OUTP": {"LOAD": 1000}, "BSWV": {"OFST": -9.6}}}, limits)
     validate_setup({"C1": {"BSWV": {"OFST": 50.0}}}, None)  # limits check off
     # the limit comes from the model table, so the field is live
     tight = limits._replace(max_offset_v_hiz=2.0)
@@ -686,11 +735,12 @@ def test_limits_for_known_models() -> None:
     lim = models.limits_for("SDG2042X")
     assert lim.model == "SDG2042X"
     assert lim.channels == 2
-    assert lim.max_freq_hz == {"SINE": 40e6, "SQUARE": 25e6, "PULSE": 25e6, "RAMP": 1e6}
+    assert lim.max_freq_hz == {"SINE": 40e6, "SQUARE": 25e6, "PULSE": 25e6, "RAMP": 1e6, "ARB": 20e6}
     assert (lim.max_amp_vpp_hiz, lim.max_amp_vpp_50, lim.max_offset_v_hiz) == (20.0, 10.0, 10.0)
     assert models.limits_for("SDG2082X").max_freq_hz["SINE"] == 80e6
     assert models.limits_for("SDG2122X").max_freq_hz["SINE"] == 120e6
     assert models.limits_for("SDG2082X").max_freq_hz["SQUARE"] == 25e6
+    assert all(m.max_freq_hz["ARB"] == 20e6 for m in models.MODELS.values())
     assert set(models.MODELS) == {"SDG2042X", "SDG2082X", "SDG2122X"}
     assert models.MODELS["SDG2042X"] is lim
 
@@ -716,3 +766,20 @@ def test_package_exports() -> None:
     assert siglent_sdg_openhtf.SetupError is SetupError
     assert siglent_sdg_openhtf.ProtocolError is ProtocolError
     assert siglent_sdg_openhtf.__version__
+
+
+@pytest.mark.parametrize(("key", "value"), [("FRQ", 0), ("FRQ", -5.0), ("PERI", 0.0), ("PERI", -1)])
+def test_validate_rejects_frq_and_peri_of_zero_or_less(key: str, value: float) -> None:
+    # measured, hardware session 1: the generator accepts FRQ,0 and then answers FRQ,0HZ,PERI,infS
+    with pytest.raises(ValueError, match=f"C1 BSWV {key}: must be greater than 0"):
+        scpi.validate_setup({"C1": {"BSWV": {key: value}}}, None)
+
+
+def test_validate_limits_above_20_mhz_levels_within_5_v() -> None:
+    limits = models.limits_for("SDG2042X")
+    scpi.validate_setup({"C1": {"BSWV": {"WVTP": "SINE", "FRQ": 20e6, "AMP": 20.0}}}, limits)
+    scpi.validate_setup({"C1": {"BSWV": {"WVTP": "SINE", "FRQ": 30e6, "AMP": 10.0}}}, limits)
+    with pytest.raises(ValueError, match="C1 BSWV AMP: 12 Vpp outside 0.002..10 Vpp"):
+        scpi.validate_setup({"C1": {"BSWV": {"WVTP": "SINE", "FRQ": 30e6, "AMP": 12.0}}}, limits)
+    with pytest.raises(ValueError, match="C1 BSWV OFST"):
+        scpi.validate_setup({"C1": {"BSWV": {"WVTP": "SINE", "FRQ": 30e6, "AMP": 1.0, "OFST": 4.8}}}, limits)

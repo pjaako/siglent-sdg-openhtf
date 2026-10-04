@@ -173,7 +173,7 @@ class Probe:
         return []
 
     def item_8_out_of_range(self) -> list[str]:
-        self.send("C1:BSWV FRQ,50E6")  # PG02 §3.4 (SINE; above the SDG2042X limit, hypothesis: silently ignored)
+        self.send("C1:BSWV FRQ,50E6")  # PG02 §3.4 (SINE; above the SDG2042X limit, clamped to 40 MHz without any sign)
         self.ask("C1:BSWV?")  # PG02 §3.4
         self.send("C1:OUTP LOAD,10")  # PG02 §3.3 (LOAD range is 50..100000: deliberately out of range)
         self.ask("C1:OUTP?")  # PG02 §3.3

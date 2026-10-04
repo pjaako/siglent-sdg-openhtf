@@ -38,7 +38,7 @@ _NOT_NOISE_DC = WAVE_TYPES - {"NOISE", "DC"}
 # Valid BSWV keys per WVTP, from the "Description" column of PG02 §3.4 ("Not valid when WVTP is ...",
 # "Only settable when WVTP is ..."). MAX_OUTPUT_AMP and WVTP: PG02 states no restriction. DLY: PG02 states no
 # restriction either, but only PULSE has a delay parameter in the reply; restricted to PULSE so that the
-# validator and the fake agree (hypothesis until hardware session 1).
+# validator and the fake agree (measured, hardware session 1: README).
 BSWV_KEY_WAVE_TYPES: Mapping[str, frozenset[str]] = {
     "WVTP": _ALL_TYPES,  # PG02 §3.4
     "FRQ": _NOT_NOISE_DC,  # PG02 §3.4
@@ -59,7 +59,7 @@ BSWV_KEY_WAVE_TYPES: Mapping[str, frozenset[str]] = {
     "MEAN": frozenset({"NOISE"}),  # PG02 §3.4
     "BANDSTATE": frozenset({"NOISE"}),  # PG02 §3.4
     "BANDWIDTH": frozenset({"NOISE"}),  # PG02 §3.4
-    "DLY": frozenset({"PULSE"}),  # PG02 §3.4; PULSE-only is a hypothesis until hardware session 1
+    "DLY": frozenset({"PULSE"}),  # PG02 §3.4; PULSE-only measured, hardware session 1 (README)
     "MAX_OUTPUT_AMP": _ALL_TYPES,  # PG02 §3.3
 }
 
@@ -71,6 +71,9 @@ _TYPE_SPECIFIC_KEYS = frozenset(
 _AMPLITUDE_KEYS = ("AMP", "AMPVRMS", "AMPDBM")  # PG02 §3.4 (Vpp, Vrms, dBm)
 _LEVEL_KEYS = ("HLEV", "LLEV")  # PG02 §3.4
 _LOAD_MIN, _LOAD_MAX = 50.0, 100000.0  # PG02 §3.3 availability table, SDG2000X: 50~100000, HiZ
+_AMP_MIN = 0.002  # Vpp, smallest amplitude; measured, hardware session 1 (README)
+_LEVEL_GAP = 0.002  # V, smallest HLEV - LLEV; measured, hardware session 1 (README)
+_HF_FRQ_HZ, _HF_LEVEL_V = 20e6, 5.0  # measured, hardware session 1 (README): above 20 MHz levels are clamped to +-5 V
 _LOAD_HIZ = "HZ"  # PG02 §3.3 example ``C1:OUTP LOAD,HZ``
 _POLARITIES = frozenset({"NOR", "INVT"})  # PG02 §3.3 <polarity>
 _ON_OFF = frozenset({"ON", "OFF"})  # PG02 §3.3, §3.4 BANDSTATE
@@ -82,14 +85,13 @@ _BSWV_RANGES: Mapping[str, tuple[float, float]] = {
     "MAX_OUTPUT_AMP": (1.0, 20.0),  # PG02 §3.3, Vpp
 }
 
-# Comparison tolerances for read-back verification.
-# hypothesis until hardware session 1: the generator's rounding of echoed values is not measured yet.
-DEFAULT_REL_TOL = 1e-6  # hypothesis until hardware session 1
-REL_TOL: dict[str, float] = {"FRQ": 1e-6, "PERI": 1e-6}  # hypothesis until hardware session 1
-ABS_TOL: dict[str, float] = {
-    **dict.fromkeys(("AMP", "AMPVRMS", "OFST", "HLEV", "LLEV", "STDEV", "MEAN", "MAX_OUTPUT_AMP"), 1e-3),
-    **dict.fromkeys(("PHSE", "DUTY", "SYM"), 1e-2),
-}  # hypothesis until hardware session 1 (provisional)
+# Comparison tolerances for read-back verification. The generator echoes numbers with 6 significant digits
+# (10 for FRQ and BANDWIDTH); measured, hardware session 1 (README). A clamped value must not match.
+DEFAULT_REL_TOL = 1e-5
+REL_TOL: dict[str, float] = {"FRQ": 1e-9, "BANDWIDTH": 1e-9}
+ABS_TOL: dict[str, float] = dict.fromkeys(
+    ("AMP", "AMPVRMS", "AMPDBM", "OFST", "HLEV", "LLEV", "STDEV", "MEAN", "PHSE", "DUTY", "SYM"), 1e-6
+)
 
 
 class Reply(NamedTuple):
@@ -122,9 +124,8 @@ def channel_name(channel: int) -> str:
 def format_value(value: object) -> str:
     """Render a Python value for a command.
 
-    bool -> ON/OFF; int -> decimal; float -> ``.9G`` (exponent form such as ``100E6`` is accepted on write,
-    PG02 §3.4 example ``BANDWIDTH,100E6``; whether ``1E-06`` is accepted is a hardware item, hypothesis
-    until hardware session 1); str unchanged.
+    bool -> ON/OFF; int -> decimal; float -> ``.10G`` (exponent forms such as ``100E6`` and ``1E-06`` are accepted on
+    write, and so are more digits than the echo shows; measured, hardware session 1, README); str unchanged.
     """
     if isinstance(value, bool):
         return "ON" if value else "OFF"
@@ -133,7 +134,7 @@ def format_value(value: object) -> str:
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError(f"cannot send non-finite value {value!r}")
-        return format(value, ".9G")
+        return format(value, ".10G")
     if isinstance(value, str):
         return value
     raise TypeError(f"cannot format {type(value).__name__} value {value!r} for SCPI")
@@ -276,6 +277,9 @@ def _check_bswv_value(where: str, key: str, value: object) -> None:
         num = _number(value)
         if num is None or not math.isfinite(num):
             raise ValueError(f"{where}: must be a finite number, got {value!r}")
+        if key in ("FRQ", "PERI") and num <= 0:
+            # measured, hardware session 1 (README): FRQ,0 is accepted and then reads FRQ,0HZ,PERI,infS
+            raise ValueError(f"{where}: must be greater than 0, got {num:g}")
         if key in _BSWV_RANGES:
             low, high = _BSWV_RANGES[key]
             if not low <= num <= high:
@@ -343,7 +347,7 @@ def _validate_bswv_combination(channel: str, bswv: Mapping[str, object]) -> None
 def _validate_limits(
     channel: str, outp: Mapping[str, object], bswv: Mapping[str, object], limits: ModelLimits
 ) -> None:
-    # hypothesis until hardware session 1: limits are datasheet figures (see models.py)
+    # Measured on the SDG2042X, hardware session 1 (README); models.py says which figures are only datasheet.
     wvtp = bswv.get("WVTP")
     frq = _number(bswv.get("FRQ"))
     if frq is not None and isinstance(wvtp, str) and wvtp in limits.max_freq_hz:
@@ -352,24 +356,49 @@ def _validate_limits(
                 f"{_where(channel, 'BSWV', 'FRQ')}: {frq:g} Hz exceeds {limits.model} {wvtp} "
                 f"limit {limits.max_freq_hz[wvtp]:g} Hz"
             )
-    # The reduced limits apply at any numeric load; no LOAD in this setup or 'HZ' means the HiZ limits.
-    numeric_load = _number(outp.get("LOAD")) is not None
-    load_text = "into a numeric load" if numeric_load else "into HiZ"
+    # Load factor k: 1 at HiZ (no numeric LOAD in this setup, or 'HZ'), LOAD/(LOAD+50) at a numeric load.
+    load = _number(outp.get("LOAD"))
+    k = 1.0 if load is None else load / (load + 50)
+    load_text = "into HiZ" if load is None else f"into {load:g} ohm"
+    max_amp = limits.max_amp_vpp_hiz * k
+    max_ofst = limits.max_offset_v_hiz * k
+    if frq is not None and frq > _HF_FRQ_HZ:
+        # measured, hardware session 1 (README): above 20 MHz the levels must stay within +-5 V
+        max_ofst = min(max_ofst, _HF_LEVEL_V)
+        max_amp = min(max_amp, 2 * _HF_LEVEL_V)
+        load_text += f" above {_HF_FRQ_HZ:g} Hz"
     amp = _number(bswv.get("AMP"))
-    if amp is not None:
-        max_amp = limits.max_amp_vpp_50 if numeric_load else limits.max_amp_vpp_hiz
-        if amp > max_amp:
-            raise ValueError(
-                f"{_where(channel, 'BSWV', 'AMP')}: {amp:g} Vpp exceeds {limits.model} limit {max_amp:g} Vpp {load_text}"
-            )
+    if amp is not None and not _AMP_MIN <= amp <= max_amp:
+        raise ValueError(
+            f"{_where(channel, 'BSWV', 'AMP')}: {amp:g} Vpp outside {_AMP_MIN:g}..{max_amp:g} Vpp "
+            f"({limits.model} {load_text})"
+        )
     ofst = _number(bswv.get("OFST"))
     if ofst is not None:
-        # hypothesis until hardware session 1: the offset limit halves at a numeric load, like the amplitude
-        max_ofst = limits.max_offset_v_hiz / 2 if numeric_load else limits.max_offset_v_hiz
         if abs(ofst) > max_ofst:
             raise ValueError(
                 f"{_where(channel, 'BSWV', 'OFST')}: {ofst:g} V exceeds {limits.model} limit +-{max_ofst:g} V {load_text}"
             )
+        if amp is not None and abs(ofst) + amp / 2 > max_ofst:
+            raise ValueError(
+                f"{_where(channel, 'BSWV', 'OFST')}: {ofst:g} V with AMP {amp:g} Vpp exceeds "
+                f"{limits.model} limit +-{max_ofst:g} V {load_text}"
+            )
+    hlev = _number(bswv.get("HLEV"))
+    llev = _number(bswv.get("LLEV"))
+    if hlev is not None and hlev > max_ofst:
+        raise ValueError(
+            f"{_where(channel, 'BSWV', 'HLEV')}: {hlev:g} V exceeds {limits.model} limit {max_ofst:g} V {load_text}"
+        )
+    if llev is not None and llev < -max_ofst:
+        raise ValueError(
+            f"{_where(channel, 'BSWV', 'LLEV')}: {llev:g} V below {limits.model} limit -{max_ofst:g} V {load_text}"
+        )
+    if hlev is not None and llev is not None and hlev - llev < _LEVEL_GAP:
+        raise ValueError(
+            f"{_where(channel, 'BSWV', 'HLEV')}: HLEV {hlev:g} V minus LLEV {llev:g} V is below {_LEVEL_GAP:g} V "
+            f"({limits.model})"
+        )
 
 
 def order_setup(channel_setup: Mapping[str, Mapping[str, object]]) -> list[tuple[str, str, object]]:
@@ -377,8 +406,8 @@ def order_setup(channel_setup: Mapping[str, Mapping[str, object]]) -> list[tuple
 
     1 OUTP STATE if off; 2 OUTP LOAD; 3 OUTP PLRT; 4 BSWV WVTP; 5 BSWV FRQ or PERI; 6 BSWV AMP/AMPVRMS/AMPDBM
     then OFST, or HLEV then LLEV; 7 other BSWV keys in the caller's order; 8 OUTP STATE if on.
-    LOAD precedes the amplitude because switching LOAD between HZ and 50 is reported to rescale the displayed
-    amplitude (hypothesis until hardware session 1; the safe order costs nothing).
+    LOAD precedes the amplitude because switching LOAD rescales the displayed levels (measured, hardware
+    session 1, README).
     """
     outp = channel_setup.get("OUTP", {})
     bswv = channel_setup.get("BSWV", {})

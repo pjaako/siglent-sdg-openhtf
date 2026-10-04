@@ -8,25 +8,26 @@ to. It emulates the v1 command subset: ``*IDN?``, ``*OPC``/``*OPC?``, ``*RST``, 
 The only source of SCPI is the official Siglent guide, ``docs/PG02-E05C.txt`` ("PG02"). Section numbers in
 the comments below refer to it, and the SDG2000X column of its availability tables is the one that counts.
 
-Nothing has been measured on the real generator yet. Everything PG02 does not state outright (defaults beyond
-the sample reply, key sets of the non-SINE waveform types, number formats, silent-ignore behaviour, load
-rescaling, value ranges) is a hypothesis and is marked ``# hypothesis until hardware session 1``. The real
-generator has no error queue (PG02 documents none), so an invalid value for a known key is silently
-ignored here too; only commands that PG02 does not define raise ``ValueError``.
+Hardware session 1 (2026-10-05, SDG2042X, firmware 2.01.01.23R7, VXI-11) measured most of the behaviour
+below; rules that were measured carry ``# measured, hardware session 1 (README)``. What was not measured
+(SDG2082X/SDG2122X limits, unparsable values, a ``WVTP`` of another family, ``FRQ <= 0``, unit suffixes on
+write, the long header spellings, a ``PERI`` of 0 or less) is still a hypothesis and
+is marked ``# hypothesis until hardware session 1``. The real generator has no error queue and clamps
+out-of-range values without any sign; only commands that PG02 does not define raise ``ValueError``.
 """
 
 import math
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Final
 
 __all__ = ["FakeSdgResource"]
 
 # --------------------------------------------------------------------------------------------------------
 # Model limits. Copied from the SDG2000X datasheet summary (NOT from PG02, which only says "refer to the
-# datasheet"); deliberately not imported from models.py.   # hypothesis until hardware session 1
+# datasheet"); deliberately not imported from models.py. The SDG2042X figures are measured; the SINE limits
+# of the other two models are not.
 # --------------------------------------------------------------------------------------------------------
 
 
@@ -38,13 +39,29 @@ class _Limits:
     max_offset_v_hiz: float
 
 
-_BASE_FREQ: Final = {"SQUARE": 25e6, "PULSE": 25e6, "RAMP": 1e6}  # hypothesis until hardware session 1
-_LIMITS: Final[dict[str, _Limits]] = {  # hypothesis until hardware session 1
-    "SDG2042X": _Limits({"SINE": 40e6, **_BASE_FREQ}, 20.0, 10.0, 10.0),
-    "SDG2082X": _Limits({"SINE": 80e6, **_BASE_FREQ}, 20.0, 10.0, 10.0),
-    "SDG2122X": _Limits({"SINE": 120e6, **_BASE_FREQ}, 20.0, 10.0, 10.0),
+_BASE_FREQ: Final = {"SQUARE": 25e6, "PULSE": 25e6, "RAMP": 1e6, "ARB": 20e6}  # measured, hardware session 1 (README)
+_LIMITS: Final[dict[str, _Limits]] = {
+    "SDG2042X": _Limits({"SINE": 40e6, **_BASE_FREQ}, 20.0, 10.0, 10.0),  # measured, hardware session 1 (README)
+    "SDG2082X": _Limits({"SINE": 80e6, **_BASE_FREQ}, 20.0, 10.0, 10.0),  # hypothesis until hardware session 1 (SINE limit)
+    "SDG2122X": _Limits({"SINE": 120e6, **_BASE_FREQ}, 20.0, 10.0, 10.0),  # hypothesis until hardware session 1 (SINE limit)
 }
-_FALLBACK_LIMITS: Final = "SDG2042X"  # unknown model: the most restrictive entry (hypothesis, mirrors models.py)
+_FALLBACK_LIMITS: Final = "SDG2042X"  # unknown model: the most restrictive entry (mirrors models.py)
+
+# Measured constants, hardware session 1 (README): the generator's own figures, not derived from PG02.
+_AMP_MIN: Final = 0.002  # Vpp, at HiZ and at 50 ohm
+_LEVEL_GAP: Final = 0.002  # smallest HLEV - LLEV
+_LOAD_MIN: Final = 50  # PG02 §3.3 SDG2000X column; a smaller value is clamped to it
+_LOAD_MAX: Final = 100000
+_MIN_EDGE_S: Final = 8.4e-9  # PULSE RISE/FALL minimum
+_MIN_PULSE_S: Final = 16.3e-9  # PULSE width and SQUARE duty margin
+_PHSE_MAX: Final = 360.0
+_HF_FRQ_HZ: Final = 20e6  # above this frequency the levels are clamped to +-5 V (20000001 Hz: 10 Vpp at HiZ)
+_HF_LEVEL_V: Final = 5.0
+_BANDWIDTH_MIN: Final = 20e6  # NOISE BANDWIDTH is clamped to 20 MHz .. 120 MHz
+_BANDWIDTH_MAX: Final = 120e6
+_STDEV_PER_AMP: Final = 0.0575  # NOISE STDEV = 0.0575 * AMP
+# AMPVRMS = AMP * factor, per WVTP (SINE is 0.3535, not 0.35355; RAMP is 1/3.464, not 1/sqrt(12))
+_VRMS_FACTOR: Final = {"SINE": 0.3535, "SQUARE": 0.5, "PULSE": 0.5, "RAMP": 1 / 3.464}
 
 # --------------------------------------------------------------------------------------------------------
 # Grammar tables
@@ -70,7 +87,7 @@ _BSWV_KEYS_OTHER_FAMILIES: Final = frozenset(
 
 _ALL_TYPES: Final = _WAVE_TYPES
 # Which WVTP a key is valid for: the "Description" column of PG02 §3.4 ("Not valid when WVTP is NOISE or DC",
-# "Only settable when WVTP is RAMP", ...). MAX_OUTPUT_AMP and WVTP carry no restriction in PG02; DLY is modelled for PULSE only.
+# "Only settable when WVTP is RAMP", ...). MAX_OUTPUT_AMP and WVTP carry no restriction in PG02; DLY is PULSE only (measured).
 _KEY_VALID_FOR: Final[dict[str, frozenset[str]]] = {
     "WVTP": _ALL_TYPES,
     "FRQ": _ALL_TYPES - {"NOISE", "DC"},
@@ -91,7 +108,7 @@ _KEY_VALID_FOR: Final[dict[str, frozenset[str]]] = {
     "MEAN": frozenset({"NOISE"}),
     "BANDSTATE": frozenset({"NOISE"}),
     "BANDWIDTH": frozenset({"NOISE"}),
-    "DLY": frozenset({"PULSE"}),  # hypothesis until hardware session 1 (echoed for PULSE only)
+    "DLY": frozenset({"PULSE"}),  # measured, hardware session 1 (README) (PULSE only)
     "MAX_OUTPUT_AMP": _ALL_TYPES,
 }
 
@@ -119,56 +136,49 @@ def _parse_number(text: str) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def _num(x: float, unit: str = "") -> str:
-    """Format a reply number: integers without decimal point (``100HZ``, ``2V``), otherwise the shortest
-    decimal without trailing zeros and without exponent (``0.01S``, ``0.000001S``); 12 significant digits.
+def _g(x: float, digits: int = 6) -> str:
+    """C ``%g`` as the generator prints numbers: 6 significant digits, lower-case exponent. # measured, hardware session 1 (README)"""
+    return format(x + 0.0, f".{digits}g")  # + 0.0: no "-0"
 
-    hypothesis until hardware session 1 (PG02 §3.4 sample reply shows ``100HZ``, ``0.01S``, ``2V``, ``-1V``)
-    """
-    x = float(format(x, ".12g"))
-    if x == 0:
-        return f"0{unit}"
-    if x.is_integer():
-        return f"{int(x)}{unit}"
-    return f"{format(Decimal(repr(x)), 'f')}{unit}"
+
+def _snap(x: float, decimals: int = 12) -> float:
+    """Round to 12 significant digits and ``decimals`` decimals. This is the one place where floating-point
+    drift (rescaling by k_new/k_old, Vrms conversions, level arithmetic) is removed, so that a
+    HiZ -> 50 -> HiZ round trip reads ``2V`` again and cancellations give 0, not 1e-17. Stored values use
+    12 decimals; the computed dBm figure uses 9 (``AMPDBM,0`` must not read ``-5e-12dBm``)."""
+    return round(float(format(x, ".12g")), decimals)
+
+
+def _k(load: int | None) -> float:
+    """Load factor: 1 at HiZ, LOAD/(LOAD+50) at a numeric load. # measured, hardware session 1 (README)"""
+    return 1.0 if load is None else load / (load + 50)
 
 
 @dataclass
 class _Channel:
-    """State of one channel. Field defaults are the power-on/``*RST`` state (PG02 §3.1.3 "default setup").
+    """State of one channel. Field defaults are the ``*RST`` state, measured in hardware session 1 (README).
 
-    Common fields equal the PG02 §3.4 sample reply (``SINE, 100 Hz, 2 Vpp, 0 V offset, 0 deg``) and the
-    PG02 §3.3 sample reply (``OFF`` is this fake's choice, the sample shows ``ON``; ``HZ``, ``NOR``).
-    Type-specific values are hypotheses.   # hypothesis until hardware session 1
+    Parameters are views of shared state (NOISE ``STDEV``/``MEAN`` are ``AMP``/``OFST``); type-specific
+    values survive a ``WVTP`` change; PULSE stores its width in seconds (its duty is derived).
     """
 
     output_on: bool = False
-    load: float | None = None  # None = HiZ ("HZ" in PG02 §3.3)
+    load: int | None = None  # None = HiZ ("HZ" in PG02 §3.3)
     polarity: str = "NOR"
     wvtp: str = "SINE"
-    frq: float = 100.0
-    amp: float = 2.0
+    frq: float = 1000.0
+    amp: float = 4.0
     ofst: float = 0.0
+    dc_ofst: float = 0.0  # DC has its own offset
     phse: float = 0.0
-    duty: float = 50.0
+    duty: float = 50.0  # SQUARE duty
     sym: float = 50.0
-    width: float = 0.000001
-    rise: float = 1e-8
-    fall: float = 1e-8
+    width: float = 0.0002  # PULSE width in seconds (DUTY 20 at 1 kHz)
+    rise: float = 8.4e-9
+    fall: float = 8.4e-9
     dly: float = 0.0
-    stdev: float = 0.5
-    mean: float = 0.0
     bandstate: str = "OFF"
-    bandwidth: float = 1e6
-    max_output_amp: float = 20.0  # PG02 §3.3 {1-20}
-
-    def reset_type_specific(self) -> None:
-        """Type-specific keys go back to their defaults when WVTP changes. hypothesis until hardware session 1"""
-        fresh = _Channel()
-        for name in (
-            "duty", "sym", "width", "rise", "fall", "dly", "stdev", "mean", "bandstate", "bandwidth",
-        ):  # fmt: skip
-            setattr(self, name, getattr(fresh, name))
+    bandwidth: float = 120e6
 
 
 class FakeSdgResource:
@@ -273,38 +283,26 @@ class FakeSdgResource:
                 channel.polarity = value.upper()
 
     def _set_load(self, channel: _Channel, text: str) -> None:
-        # PG02 §3.3 SDG2000X column: LOAD is 50~100000 or HiZ (written "HZ" in the examples). Anything
-        # else is silently ignored (no error queue).
+        # PG02 §3.3 SDG2000X column: LOAD is 50~100000 or HiZ (written "HZ" in the examples). Out of range is
+        # clamped, a fraction is cut off.   # measured, hardware session 1 (README)
         if text.upper() == "HZ":
-            new: float | None = None
+            new: int | None = None
         else:
             value = _parse_number(text)
-            if value is None or not 50 <= value <= 100000:
-                return
-            new = value
+            if value is None:
+                return  # hypothesis until hardware session 1 (unparsable value ignored)
+            new = int(min(max(value, _LOAD_MIN), _LOAD_MAX))
         old = channel.load
         channel.load = new
-        self._rescale_for_load_change(channel, old, new)
-
-    @staticmethod
-    def _rescale_for_load_change(channel: _Channel, old: float | None, new: float | None) -> None:
-        """LOAD-RESCALE HYPOTHESIS (the one place to delete if the hardware disagrees).
-
-        Third-party reports say that switching the load between HiZ and a numeric load makes the generator
-        rescale the displayed amplitude and offset (the stored voltage into the load is kept). PG02 does not
-        say so. Modelled as: HZ -> number halves AMP and OFST, number -> HZ doubles them, number -> number
-        changes nothing.   # hypothesis until hardware session 1
-        """
-        if old is None and new is not None:
-            channel.amp /= 2
-            channel.ofst /= 2
-        elif old is not None and new is None:
-            channel.amp *= 2
-            channel.ofst *= 2
+        # A load change rescales every displayed level by k_new / k_old.   # measured, hardware session 1 (README)
+        factor = _k(new) / _k(old)
+        channel.amp = _snap(channel.amp * factor)
+        channel.ofst = _snap(channel.ofst * factor)
+        channel.dc_ofst = _snap(channel.dc_ofst * factor)
 
     def _write_bswv(self, channel: _Channel, tokens: list[str], cmd: str) -> None:
-        # PG02 §3.4: <channel>:BSWV <parameter>,<value>. One pair per command is the documented form; several
-        # pairs in one command are accepted and applied left to right.   # hypothesis until hardware session 1
+        # PG02 §3.4: <channel>:BSWV <parameter>,<value>. Several pairs in one command are applied left to
+        # right.   # measured, hardware session 1 (README)
         pairs = _pairs(tokens)
         for key, _ in pairs:  # grammar check first: an undefined command applies nothing
             if key not in _BSWV_KEYS and key not in _BSWV_KEYS_OTHER_FAMILIES:
@@ -313,7 +311,7 @@ class FakeSdgResource:
             if value is None or key in _BSWV_KEYS_OTHER_FAMILIES:
                 continue  # silently ignored: no value / parameter not available on SDG2000X (§3.4 table)
             if channel.wvtp not in _KEY_VALID_FOR[key]:
-                continue  # silently ignored: key not valid for the current WVTP (§3.4 "Description")
+                continue  # silently ignored: key not valid for the current WVTP. measured, hardware session 1 (README)
             self._set_bswv(channel, key, value)
 
     def _set_bswv(self, channel: _Channel, key: str, text: str) -> None:
@@ -326,89 +324,116 @@ class FakeSdgResource:
             return
         value = _parse_number(text)
         if value is None:
-            return  # invalid value for a known key: silently ignored
+            return  # invalid value for a known key: silently ignored. hypothesis until hardware session 1
+        k = _k(channel.load)
+        factor = _VRMS_FACTOR.get(channel.wvtp)
         if key == "FRQ":
             self._set_frq(channel, value)
         elif key == "PERI":  # PERI = 1/FRQ
             if value > 0:
                 self._set_frq(channel, 1 / value)
         elif key == "AMP":
-            self._set_amp_ofst(channel, value, channel.ofst)
+            self._set_amp(channel, value)
         elif key == "AMPVRMS":
-            # Vrms -> Vpp conversion is modelled for SINE only; other types are ignored.
-            # hypothesis until hardware session 1
-            if channel.wvtp == "SINE":
-                self._set_amp_ofst(channel, value * 2 * math.sqrt(2), channel.ofst)
+            if factor is not None:  # ARB ignores it (guess: it echoes neither)   # measured for SINE only
+                self._set_amp(channel, value / factor)
         elif key == "AMPDBM":
-            # dBm into 50 ohm -> Vpp, SINE only. hypothesis until hardware session 1
-            if channel.wvtp == "SINE":
-                vrms = math.sqrt(50 * 10 ** (value / 10) / 1000)
-                self._set_amp_ofst(channel, vrms * 2 * math.sqrt(2), channel.ofst)
+            # Ignored while LOAD is HZ. # measured, hardware session 1 (README); SINE only, other types guessed
+            if factor is not None and channel.load is not None:
+                self._set_amp(channel, math.sqrt(channel.load * 0.001 * 10 ** (value / 10)) / factor)
         elif key == "OFST":
-            self._set_amp_ofst(channel, channel.amp, value)
-        elif key == "HLEV":  # high level = OFST + AMP/2
+            if channel.wvtp == "DC":
+                channel.dc_ofst = _snap(min(max(value, -10 * k), 10 * k))
+            else:
+                self._set_ofst(channel, value)
+        elif key == "HLEV":  # high level = OFST + AMP/2, the low level stays
             low = channel.ofst - channel.amp / 2
-            self._set_amp_ofst(channel, value - low, (value + low) / 2)
-        elif key == "LLEV":  # low level = OFST - AMP/2
+            high = min(max(value, low + _LEVEL_GAP), self._window(channel))
+            channel.amp, channel.ofst = _snap(high - low), _snap((high + low) / 2)
+        elif key == "LLEV":  # low level = OFST - AMP/2, the high level stays
             high = channel.ofst + channel.amp / 2
-            self._set_amp_ofst(channel, high - value, (high + value) / 2)
+            low = min(max(value, -self._window(channel)), high - _LEVEL_GAP)
+            channel.amp, channel.ofst = _snap(high - low), _snap((high + low) / 2)
+        elif key == "STDEV":  # view of AMP
+            self._set_amp(channel, value / _STDEV_PER_AMP)
+        elif key == "MEAN":  # view of OFST
+            self._set_ofst(channel, value)
         else:
             self._set_simple(channel, key, value)
 
     def _set_wvtp(self, channel: _Channel, wvtp: str) -> None:
         if wvtp not in _WAVE_TYPES or wvtp == channel.wvtp:
-            return  # PRBS/IQ are not SDG2000X; an unchanged type is a no-op (hypothesis)
-        channel.wvtp = wvtp
-        # FRQ/AMP/OFST/PHSE are kept, type-specific keys go back to defaults. hypothesis until hardware session 1
-        channel.reset_type_specific()
-        # A frequency above the new type's limit is clamped. hypothesis until hardware session 1
-        limit = self._limits.max_freq_hz.get(wvtp)
-        if limit is not None and channel.frq > limit:
-            channel.frq = limit
+            return  # PRBS/IQ are not SDG2000X; an unchanged type is a no-op. hypothesis until hardware session 1
+        if channel.wvtp == "PULSE":  # leaving PULSE turns its delay into the phase   # measured, hardware session 1 (README)
+            channel.phse = _snap(-360 * channel.dly * channel.frq)
+        channel.wvtp = wvtp  # every other value survives the change   # measured, hardware session 1 (README)
+        self._set_frq(channel, channel.frq)  # frequency (and with it SQUARE duty, PULSE width) clamped for the new type
 
     def _set_frq(self, channel: _Channel, frq: float) -> None:
-        limit = self._limits.max_freq_hz.get(channel.wvtp)  # hypothesis until hardware session 1
-        if frq > 0 and (limit is None or frq <= limit):
-            channel.frq = frq
-
-    def _set_amp_ofst(self, channel: _Channel, amp: float, ofst: float) -> None:
-        # Amplitude and offset limits depend on the load: 20 Vpp HiZ, 10 Vpp at a numeric load; offset +-10 V
-        # HiZ and half of that at a numeric load.   # hypothesis until hardware session 1
-        hiz = channel.load is None
-        max_amp = self._limits.max_amp_vpp_hiz if hiz else self._limits.max_amp_vpp_50
-        max_ofst = self._limits.max_offset_v_hiz * (1 if hiz else 0.5)
-        if 0 < amp <= max_amp + 1e-12 and abs(ofst) <= max_ofst + 1e-12:
-            channel.amp = amp
-            channel.ofst = ofst
+        # Clamped to 0 .. the type's maximum; 0 Hz is accepted (PERI then reads inf).   # measured, hardware session 1 (README)
+        limit = self._limits.max_freq_hz.get(channel.wvtp)
+        channel.frq = max(frq, 0.0) if limit is None else min(max(frq, 0.0), limit)
+        if channel.wvtp == "PULSE":  # the width in seconds survives, clamped to the new period
+            self._set_width(channel, channel.width)
+        elif channel.wvtp == "SQUARE":  # the duty is clamped again and stays clamped
+            self._set_square_duty(channel, channel.duty)
+        if channel.amp > 2 * self._window(channel):  # above 20 MHz the amplitude is clamped and stays clamped
+            channel.amp = 2 * self._window(channel)  # measured at OFST 0 only; the offset is then dropped (guess)
+            channel.ofst = 0.0
 
     @staticmethod
-    def _set_simple(channel: _Channel, key: str, value: float) -> None:
-        # Value ranges from PG02 §3.4 where it gives them (PHSE 0..360, SYM/DUTY 0..100, MAX_OUTPUT_AMP 1..20
-        # in §3.3); the rest is "refer to the datasheet", modelled as merely positive.
-        # hypothesis until hardware session 1
-        if key == "PHSE" and 0 <= value <= 360:
-            channel.phse = value
-        elif key == "SYM" and 0 <= value <= 100:
-            channel.sym = value
-        elif key == "DUTY" and 0 <= value <= 100:
-            channel.duty = value
-        elif key == "WIDTH" and value > 0:
-            channel.width = value
-        elif key == "RISE" and value > 0:
-            channel.rise = value
-        elif key == "FALL" and value > 0:
-            channel.fall = value
-        elif key == "DLY" and value >= 0:
-            channel.dly = value
-        elif key == "STDEV" and value > 0:
-            channel.stdev = value
-        elif key == "MEAN":
-            channel.mean = value
-        elif key == "BANDWIDTH" and value > 0:
-            channel.bandwidth = value
-        elif key == "MAX_OUTPUT_AMP" and 1 <= value <= 20:
-            channel.max_output_amp = value
+    def _set_square_duty(channel: _Channel, duty: float) -> None:
+        # Clamped to 100*16.3e-9*FRQ .. 100 - that.   # measured, hardware session 1 (README)
+        margin = 100 * _MIN_PULSE_S * channel.frq
+        channel.duty = min(max(duty, margin), 100 - margin)
 
+    @staticmethod
+    def _set_width(channel: _Channel, width: float) -> None:
+        # measured, hardware session 1 (README); not modelled: a long edge lowers the maximum
+        if channel.frq > 0:  # at 0 Hz: not measured, the width is left alone
+            width = min(max(width, _MIN_PULSE_S), 1 / channel.frq - _MIN_PULSE_S)
+        channel.width = width
+
+    def _window(self, channel: _Channel) -> float:
+        """Largest level in volts: 10*k, and 5 above 20 MHz (DC excepted). # measured, hardware session 1 (README)"""
+        window = self._limits.max_offset_v_hiz * _k(channel.load)
+        return min(window, _HF_LEVEL_V) if channel.frq > _HF_FRQ_HZ else window
+
+    def _set_amp(self, channel: _Channel, amp: float) -> None:
+        # Clamped to 0.002 .. 2*(window - |OFST|).   # measured, hardware session 1 (README)
+        top = 2 * (self._window(channel) - abs(channel.ofst))
+        channel.amp = _snap(min(max(amp, _AMP_MIN), top))
+
+    def _set_ofst(self, channel: _Channel, ofst: float) -> None:
+        # Clamped to +-(window - AMP/2).   # measured, hardware session 1 (README)
+        limit = self._window(channel) - channel.amp / 2
+        channel.ofst = _snap(min(max(ofst, -limit), limit))
+
+    def _set_simple(self, channel: _Channel, key: str, value: float) -> None:
+        if key == "PHSE":  # 400 reads 40, 360 stays 360, -90 stays   # measured, hardware session 1 (README)
+            # 725 reads 5, -400 reads -40: the sign stays
+            channel.phse = math.fmod(value, _PHSE_MAX) if abs(value) > _PHSE_MAX else value
+        elif key == "SYM":  # clamped to 0..100   # measured, hardware session 1 (README)
+            channel.sym = min(max(value, 0.0), 100.0)
+        elif key == "DUTY":
+            if channel.wvtp == "PULSE":  # one quantity with WIDTH (DUTY = 100*WIDTH*FRQ)
+                self._set_width(channel, value / 100 / channel.frq)
+            else:
+                self._set_square_duty(channel, value)
+        elif key == "WIDTH":
+            self._set_width(channel, value)
+        elif key == "RISE":
+            channel.rise = max(value, _MIN_EDGE_S)
+        elif key == "FALL":
+            channel.fall = max(value, _MIN_EDGE_S)
+        elif key == "DLY":  # clamped to +- one period   # measured, hardware session 1 (README)
+            period = 1 / channel.frq if channel.frq > 0 else math.inf
+            channel.dly = min(max(value, -period), period)
+        elif key == "BANDWIDTH":  # clamped   # measured, hardware session 1 (README)
+            channel.bandwidth = min(max(value, _BANDWIDTH_MIN), _BANDWIDTH_MAX)
+        # MAX_OUTPUT_AMP (PG02 §3.3): accepted, no visible effect   # measured, hardware session 1 (README)
+
+    # ----------------------------------------------------------------------------------------------------
     # ----------------------------------------------------------------------------------------------------
     # Queries
     # ----------------------------------------------------------------------------------------------------
@@ -431,55 +456,50 @@ class FakeSdgResource:
 
     @staticmethod
     def _outp_reply(name: str, channel: _Channel) -> str:
-        # PG02 §3.3 response format and example: "C1:OUTP ON,LOAD,HZ,PLRT,NOR"
+        # PG02 §3.3 response format and example: "C1:OUTP ON,LOAD,HZ,PLRT,NOR"; a numeric load is an integer
         state = "ON" if channel.output_on else "OFF"
-        load = "HZ" if channel.load is None else _num(channel.load)  # numeric load format: hypothesis
+        load = "HZ" if channel.load is None else str(channel.load)  # measured, hardware session 1 (README)
         return f"{name}:OUTP {state},LOAD,{load},PLRT,{channel.polarity}"
 
     @staticmethod
     def _bswv_reply(name: str, channel: _Channel) -> str:
-        # PG02 §3.4 sample reply (SINE, defaults):
-        #   C1:BSWV WVTP,SINE,FRQ,100HZ,PERI,0.01S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
-        # Every other key set below is derived from the §3.4 validity rules and is a hypothesis until the
-        # first hardware session; so are the unit suffixes of DUTY (none), SYM (none), STDEV/MEAN (V).
-        fields: list[tuple[str, str]] = [("WVTP", channel.wvtp)]
-
-        def common() -> None:
-            fields.append(("FRQ", _num(channel.frq, "HZ")))
-            fields.append(("PERI", _num(1 / channel.frq, "S")))
-            fields.append(("AMP", _num(channel.amp, "V")))
-            fields.append(("OFST", _num(channel.ofst, "V")))
-            fields.append(("HLEV", _num(channel.ofst + channel.amp / 2, "V")))
-            fields.append(("LLEV", _num(channel.ofst - channel.amp / 2, "V")))
-
+        # Key sets, order, units and number formats: measured, hardware session 1 (README). PG02 §3.4 sample
+        # reply is the shape: C1:BSWV WVTP,SINE,FRQ,100HZ,PERI,0.01S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
         wvtp = channel.wvtp
-        if wvtp in ("SINE", "ARB"):
-            common()
-            fields.append(("PHSE", _num(channel.phse)))
-        elif wvtp == "SQUARE":
-            common()
-            fields.append(("PHSE", _num(channel.phse)))
-            fields.append(("DUTY", _num(channel.duty)))
-        elif wvtp == "RAMP":
-            common()
-            fields.append(("PHSE", _num(channel.phse)))
-            fields.append(("SYM", _num(channel.sym)))
-        elif wvtp == "PULSE":  # no PHSE (§3.4: not valid for PULSE); DUTY is settable for SQUARE or PULSE (§3.4)
-            # DUTY in the PULSE reply: hypothesis until hardware session 1
-            common()
-            fields.append(("DUTY", _num(channel.duty)))
-            fields.append(("WIDTH", _num(channel.width, "S")))
-            fields.append(("RISE", _num(channel.rise, "S")))
-            fields.append(("FALL", _num(channel.fall, "S")))
-            fields.append(("DLY", _num(channel.dly, "S")))
-        elif wvtp == "NOISE":
-            fields.append(("STDEV", _num(channel.stdev, "V")))
-            fields.append(("MEAN", _num(channel.mean, "V")))
+        fields: list[tuple[str, str]] = [("WVTP", wvtp)]
+        if wvtp == "NOISE":
+            fields.append(("STDEV", _g(_snap(channel.amp * _STDEV_PER_AMP)) + "V"))
+            fields.append(("MEAN", _g(channel.ofst) + "V"))
             fields.append(("BANDSTATE", channel.bandstate))
             if channel.bandstate == "ON":
-                fields.append(("BANDWIDTH", _num(channel.bandwidth, "HZ")))
-        else:  # DC
-            fields.append(("OFST", _num(channel.ofst, "V")))
+                fields.append(("BANDWIDTH", _g(channel.bandwidth, 10) + "HZ"))
+        elif wvtp == "DC":
+            fields.append(("OFST", _g(channel.dc_ofst) + "V"))
+        else:
+            fields.append(("FRQ", _g(channel.frq, 10) + "HZ"))
+            fields.append(("PERI", (_g(1 / channel.frq) if channel.frq > 0 else "inf") + "S"))
+            fields.append(("AMP", _g(channel.amp) + "V"))
+            factor = _VRMS_FACTOR.get(wvtp)  # ARB has neither AMPVRMS nor AMPDBM
+            if factor is not None:
+                vrms = channel.amp * factor
+                fields.append(("AMPVRMS", _g(vrms) + "Vrms"))
+                if channel.load is not None:  # AMPDBM only at a numeric load (RAMP: guess)
+                    fields.append(("AMPDBM", _g(_snap(10 * math.log10(vrms**2 / channel.load / 0.001), 9)) + "dBm"))
+            fields.append(("OFST", _g(channel.ofst) + "V"))
+            fields.append(("HLEV", _g(_snap(channel.ofst + channel.amp / 2)) + "V"))
+            fields.append(("LLEV", _g(_snap(channel.ofst - channel.amp / 2)) + "V"))
+            if wvtp == "PULSE":  # no PHSE
+                fields.append(("DUTY", _g(100 * channel.width * channel.frq)))
+                fields.append(("WIDTH", _g(channel.width)))
+                fields.append(("RISE", _g(channel.rise) + "S"))
+                fields.append(("FALL", _g(channel.fall) + "S"))
+                fields.append(("DLY", _g(channel.dly)))
+            else:
+                fields.append(("PHSE", _g(channel.phse)))
+                if wvtp == "SQUARE":
+                    fields.append(("DUTY", _g(channel.duty)))
+                elif wvtp == "RAMP":
+                    fields.append(("SYM", _g(channel.sym)))
         body = ",".join(token for pair in fields for token in pair)
         return f"{name}:BSWV {body}"
 
