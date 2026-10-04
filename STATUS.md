@@ -19,7 +19,7 @@ Secrets (real IP, serial number, probe dumps) never go here; they live in the gi
 |---|---|---|
 | T0 | Branch, AGENTS.md, SPEC.md, placeholders, README stub, STATUS.md, LICENSE, docs text | done |
 | T1 | Packaging: pyproject, uv.lock, package skeleton, CI, test_import | done |
-| T2 | `scpi.py` + `models.py` + `tests/test_scpi.py` | todo (parallel with T3) |
+| T2 | `scpi.py` + `models.py` + `tests/test_scpi.py` | done |
 | T3 | `fake_resource.py` + `tests/test_fake_resource.py` | todo (parallel with T2) |
 | T4 | `plug.py` + `tests/test_plug.py` | todo |
 | T5 | `example_test.py`, `tools/probe.py`, `tests/test_examples.py`, README usage | todo |
