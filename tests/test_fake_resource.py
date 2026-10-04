@@ -759,3 +759,19 @@ def test_module_source_imports_nothing_from_this_package() -> None:
     for name in imported:
         root = name.split(".")[0]
         assert root not in {"pyvisa", "openhtf", "siglent_sdg_openhtf"}, name
+
+
+def test_default_write_termination_is_newline() -> None:
+    assert FakeSdgResource().write_termination == "\n"  # PG02 §5.2.1
+
+
+@pytest.mark.parametrize("wvtp", ["SINE", "SQUARE", "RAMP", "NOISE", "DC"])
+def test_dly_is_ignored_unless_pulse(wvtp: str) -> None:
+    # hypothesis until hardware session 1: DLY is a PULSE parameter (validator and fake agree)
+    fake = FakeSdgResource()
+    fake.write(f"C1:BSWV WVTP,{wvtp}")
+    before = fake.query("C1:BSWV?")
+    fake.write("C1:BSWV DLY,0.001")
+    assert fake.query("C1:BSWV?") == before
+    fake.write("C1:BSWV WVTP,PULSE")
+    assert bswv(fake)["DLY"] == "0S"

@@ -2,8 +2,8 @@
 
 The only source of SCPI is the official guide PG02-E05C (``docs/PG02-E05C.txt``, "PG02"). Every command
 literal below carries its section. The plug sends nothing else, ever: on this family an undefined query can
-hang the generator's VXI-11 service until a power cycle. All channel commands are built by ``scpi.build_outp``
-/ ``scpi.build_bswv`` and all channel replies are parsed by ``scpi.parse_reply`` / ``scpi.typed_fields``.
+hang the generator's VXI-11 service until a power cycle. All channel commands are built by ``scpi.build_command``
+(``build_outp`` / ``build_bswv``) and all channel replies are parsed by ``scpi.parse_reply`` / ``scpi.typed_fields``.
 
 The plug stays thin: test conditions are data (``Setup``), validated before anything is sent, written in a
 safe order, read back and verified; every mismatch is reported at once. PG02 documents no error queue for
@@ -23,7 +23,7 @@ from .scpi import (
     Reply,
     Setup,
     SetupError,
-    build_bswv,
+    build_command,
     build_outp,
     channel_name,
     format_value,
@@ -82,7 +82,8 @@ def _resolve_resource_name(rm: Any, name: str) -> str:
     """VISA resource name from the ``siglent_sdg_resource`` setting.
 
     ``::`` in the name: used as is. Other non-empty name: a bare IP/hostname, VXI-11 (PG02 §1). Empty: the
-    first USB instrument with vendor id ``0xF4EC``; pyvisa-py may report the vendor in decimal, hence
+    first USB instrument with vendor id ``0xF4EC`` whose serial starts with ``SDG`` (else the first with that
+    vendor id); pyvisa-py may report the vendor in decimal, hence
     ``int(field, 0)``.
     """
     name = name.strip()
@@ -90,6 +91,7 @@ def _resolve_resource_name(rm: Any, name: str) -> str:
         return name
     if name:
         return f"TCPIP0::{name}::inst0::INSTR"
+    matches: list[str] = []
     for candidate in rm.list_resources(_USB_QUERY):
         fields = str(candidate).split("::")
         if len(fields) < 2:
@@ -99,7 +101,15 @@ def _resolve_resource_name(rm: Any, name: str) -> str:
         except ValueError:
             continue
         if vendor == _SIGLENT_USB_VENDOR:
-            return str(candidate)
+            matches.append(str(candidate))
+    # Siglent scopes (serial "SDS...") share the vendor id: prefer a generator ("SDG..."), else the first match.
+    # The serial is the 4th field of USB0::<vendor>::<product>::<serial>::INSTR. hypothesis until hardware session 1
+    for candidate_name in matches:
+        fields = candidate_name.split("::")
+        if len(fields) >= 4 and fields[3].upper().startswith("SDG"):
+            return candidate_name
+    if matches:
+        return matches[0]
     raise RuntimeError(
         "no Siglent USB instrument (vendor 0xF4EC) found and no 'siglent_sdg_resource' configured; "
         "set CONF.siglent_sdg_resource to an IP address or a VISA resource name"
@@ -137,17 +147,22 @@ class SiglentSdgPlug(BasePlug):  # type: ignore[misc]  # OpenHTF is untyped
     # Raw access
     # ------------------------------------------------------------------------------------------------
 
+    def _resource_or_raise(self) -> _VisaResource:
+        if self._resource is None:
+            raise RuntimeError("plug closed")
+        return self._resource
+
     def write(self, cmd: str) -> None:
         """Send one command. Callers are responsible for sending only commands defined in PG02."""
-        assert self._resource is not None
+        resource = self._resource_or_raise()
         self.logger.debug("-> %s", cmd)
-        self._resource.write(cmd)
+        resource.write(cmd)
 
     def query(self, cmd: str) -> str:
         """Send one query and return the stripped reply. Any query is a completion barrier (PG02 §3.1.2)."""
-        assert self._resource is not None
+        resource = self._resource_or_raise()
         self.logger.debug("-> %s", cmd)
-        reply = str(self._resource.query(cmd)).strip()
+        reply = str(resource.query(cmd)).strip()
         self.logger.debug("<- %s", reply)
         return reply
 
@@ -200,8 +215,8 @@ class SiglentSdgPlug(BasePlug):  # type: ignore[misc]  # OpenHTF is untyped
         ch = channel_name(channel)
         setup: Setup = {ch: {group: params}}
         validate_setup(setup, self._limits_to_check())
-        for _group, key, value in order_setup({group: params}):
-            self.write(build_outp(channel, key, value) if group == "OUTP" else build_bswv(channel, key, value))
+        for _, key, value in order_setup({group: params}):
+            self.write(build_command(channel, group, key, value))
 
     def set_basic_wave(self, channel: int, params: Mapping[str, object]) -> None:
         """One ``<ch>:BSWV <key>,<value>`` (PG02 §3.4) per key, in ``order_setup`` order; no verification.
@@ -231,7 +246,7 @@ class SiglentSdgPlug(BasePlug):  # type: ignore[misc]  # OpenHTF is untyped
         for ch_name, groups in setup.items():
             channel = int(ch_name[1:])  # validated to be C1 or C2
             for group, key, value in order_setup(groups):
-                self.write(build_outp(channel, key, value) if group == "OUTP" else build_bswv(channel, key, value))
+                self.write(build_command(channel, group, key, value))
                 commands += 1
                 touched.setdefault(channel, {}).setdefault(group, {})[key] = value
         failures: list[str] = []

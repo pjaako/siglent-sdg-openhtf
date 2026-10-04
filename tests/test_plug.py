@@ -89,7 +89,8 @@ def test_unlisted_sdg2_model_gets_sdg2042x_limits() -> None:
 
 def test_resource_attributes_are_set() -> None:
     fake = FakeSdgResource()
-    assert fake.write_termination == "\r\n"
+    assert fake.write_termination == "\n"  # PG02 §5.2.1, same default as the plug sets
+    fake.write_termination = "\r\n"
     SiglentSdgPlug(resource=fake)
     assert fake.timeout == 5000
     assert fake.read_termination == "\n"  # PG02 §5.2.1
@@ -449,6 +450,19 @@ def test_teardown_twice_is_harmless() -> None:
     assert fake.log == log == ["C1:OUTP OFF", "C2:OUTP OFF"]
 
 
+def test_write_and_query_after_teardown_raise_plug_closed() -> None:
+    plug, fake = _plug()
+    plug.tearDown()
+    fake.log.clear()
+    with pytest.raises(RuntimeError, match="plug closed"):
+        plug.write("C1:OUTP OFF")  # PG02 §3.3
+    with pytest.raises(RuntimeError, match="plug closed"):
+        plug.query("*IDN?")  # PG02 §3.1.1
+    with pytest.raises(RuntimeError, match="plug closed"):
+        plug.apply_setup(EXAMPLE_SETUP)
+    assert fake.log == []
+
+
 def test_teardown_without_any_other_traffic_never_restores_settings() -> None:
     plug, fake = _plug()
     plug.apply_setup({"C1": {"BSWV": {"FRQ": 1234}}})
@@ -540,6 +554,31 @@ def test_usb_discovery_matches_vendor_in_hex_and_decimal(monkeypatch: pytest.Mon
     assert rm.list_queries == ["USB?*::INSTR"]
     assert rm.opened == [usb_name]
     assert plug.identity.model == "SDG2042X"
+    plug.tearDown()
+
+
+@CONF.save_and_restore
+def test_usb_discovery_prefers_a_generator_serial_over_another_siglent_instrument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    CONF.load(siglent_sdg_resource="")
+    scope = "USB0::0xF4EC::0x1011::SDS1EXAMPLE001::INSTR"  # a Siglent scope: same vendor id, serial SDS...
+    generator = "USB0::0xF4EC::0x1011::SDG2XEXAMPLE001::INSTR"
+    rm = _StubRM([scope, generator])
+    _install_rm(monkeypatch, rm)
+    plug = SiglentSdgPlug()
+    assert rm.opened == [generator]
+    plug.tearDown()
+
+
+@CONF.save_and_restore
+def test_usb_discovery_falls_back_to_the_first_vendor_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    CONF.load(siglent_sdg_resource="")
+    first = "USB0::0xF4EC::0x1011::SDS1EXAMPLE001::INSTR"
+    rm = _StubRM([first, "USB0::0xF4EC::0x1011::XYZ::INSTR"])
+    _install_rm(monkeypatch, rm)
+    plug = SiglentSdgPlug()
+    assert rm.opened == [first]
     plug.tearDown()
 
 

@@ -36,7 +36,9 @@ _ALL_TYPES = WAVE_TYPES
 _NOT_NOISE_DC = WAVE_TYPES - {"NOISE", "DC"}
 
 # Valid BSWV keys per WVTP, from the "Description" column of PG02 §3.4 ("Not valid when WVTP is ...",
-# "Only settable when WVTP is ..."). DLY, MAX_OUTPUT_AMP and WVTP: PG02 states no restriction.
+# "Only settable when WVTP is ..."). MAX_OUTPUT_AMP and WVTP: PG02 states no restriction. DLY: PG02 states no
+# restriction either, but only PULSE has a delay parameter in the reply; restricted to PULSE so that the
+# validator and the fake agree (hypothesis until hardware session 1).
 BSWV_KEY_WAVE_TYPES: Mapping[str, frozenset[str]] = {
     "WVTP": _ALL_TYPES,  # PG02 §3.4
     "FRQ": _NOT_NOISE_DC,  # PG02 §3.4
@@ -57,14 +59,14 @@ BSWV_KEY_WAVE_TYPES: Mapping[str, frozenset[str]] = {
     "MEAN": frozenset({"NOISE"}),  # PG02 §3.4
     "BANDSTATE": frozenset({"NOISE"}),  # PG02 §3.4
     "BANDWIDTH": frozenset({"NOISE"}),  # PG02 §3.4
-    "DLY": _ALL_TYPES,  # PG02 §3.4
+    "DLY": frozenset({"PULSE"}),  # PG02 §3.4; PULSE-only is a hypothesis until hardware session 1
     "MAX_OUTPUT_AMP": _ALL_TYPES,  # PG02 §3.3
 }
 
 # Keys that only exist for a few waveform types. Without a ``WVTP`` in the same channel setup they are
 # rejected (the plug cannot know the generator's current type without querying it).
 _TYPE_SPECIFIC_KEYS = frozenset(
-    {"SYM", "DUTY", "WIDTH", "RISE", "FALL", "STDEV", "MEAN", "BANDSTATE", "BANDWIDTH"}
+    {"SYM", "DUTY", "WIDTH", "RISE", "FALL", "DLY", "STDEV", "MEAN", "BANDSTATE", "BANDWIDTH"}
 )
 _AMPLITUDE_KEYS = ("AMP", "AMPVRMS", "AMPDBM")  # PG02 §3.4 (Vpp, Vrms, dBm)
 _LEVEL_KEYS = ("HLEV", "LLEV")  # PG02 §3.4
@@ -72,7 +74,13 @@ _LOAD_MIN, _LOAD_MAX = 50.0, 100000.0  # PG02 §3.3 availability table, SDG2000X
 _LOAD_HIZ = "HZ"  # PG02 §3.3 example ``C1:OUTP LOAD,HZ``
 _POLARITIES = frozenset({"NOR", "INVT"})  # PG02 §3.3 <polarity>
 _ON_OFF = frozenset({"ON", "OFF"})  # PG02 §3.3, §3.4 BANDSTATE
-_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9_.+-]+$")
+# Value ranges PG02 documents (the rest is "refer to the datasheet"): key -> (min, max)
+_BSWV_RANGES: Mapping[str, tuple[float, float]] = {
+    "PHSE": (0.0, 360.0),  # PG02 §3.4, degrees
+    "SYM": (0.0, 100.0),  # PG02 §3.4, percent
+    "DUTY": (0.0, 100.0),  # PG02 §3.4, percent
+    "MAX_OUTPUT_AMP": (1.0, 20.0),  # PG02 §3.3, Vpp
+}
 
 # Comparison tolerances for read-back verification.
 # hypothesis until hardware session 1: the generator's rounding of echoed values is not measured yet.
@@ -136,10 +144,19 @@ def build_bswv(channel: int, key: str, value: object) -> str:
     return f"{channel_name(channel)}:BSWV {key},{format_value(value)}"  # PG02 §3.4
 
 
-def _is_on(value: object) -> bool:
+def _on_off(value: object) -> str | None:
+    """``'ON'``/``'OFF'`` for a bool or an ON/OFF string (strip + upper), else ``None``. One rule everywhere."""
     if isinstance(value, bool):
-        return value
-    return isinstance(value, str) and value.strip().upper() == "ON"
+        return "ON" if value else "OFF"
+    if isinstance(value, str):
+        text = value.strip().upper()
+        if text in _ON_OFF:
+            return text
+    return None
+
+
+def _is_on(value: object) -> bool:
+    return _on_off(value) == "ON"
 
 
 def build_outp(channel: int, key: str, value: object) -> str:
@@ -153,6 +170,15 @@ def build_outp(channel: int, key: str, value: object) -> str:
     if key == "PLRT":
         return f"{ch}:OUTP PLRT,{format_value(value)}"  # PG02 §3.3
     raise ValueError(f"unknown OUTP key {key!r}")
+
+
+def build_command(channel: int, group: str, key: str, value: object) -> str:
+    """The write command for one ``(group, key, value)`` triple: ``build_outp`` or ``build_bswv`` (PG02 §3.3, §3.4)."""
+    if group == "OUTP":
+        return build_outp(channel, key, value)
+    if group == "BSWV":
+        return build_bswv(channel, key, value)
+    raise ValueError(f"unknown group {group!r}; expected one of {list(GROUPS)}")
 
 
 def parse_reply(raw: str, expect_header: str, leading_key: str | None = None) -> Reply:
@@ -225,7 +251,7 @@ def _where(channel: str, group: str, key: str | None = None) -> str:
 
 def _check_outp_value(where: str, key: str, value: object) -> None:
     if key == "STATE":
-        if not (isinstance(value, bool) or (isinstance(value, str) and value.upper() in _ON_OFF)):
+        if _on_off(value) is None:
             raise ValueError(f"{where}: must be a bool or 'ON'/'OFF', got {value!r}")  # PG02 §3.3
     elif key == "LOAD":
         num = _number(value)
@@ -244,12 +270,16 @@ def _check_bswv_value(where: str, key: str, value: object) -> None:
         if not (isinstance(value, str) and value in WAVE_TYPES):
             raise ValueError(f"{where}: {value!r} is not one of {sorted(WAVE_TYPES)}")  # PG02 §3.4
     elif key == "BANDSTATE":
-        if not (isinstance(value, bool) or (isinstance(value, str) and value.upper() in _ON_OFF)):
+        if _on_off(value) is None:
             raise ValueError(f"{where}: must be a bool or 'ON'/'OFF', got {value!r}")  # PG02 §3.4
     else:
         num = _number(value)
         if num is None or not math.isfinite(num):
             raise ValueError(f"{where}: must be a finite number, got {value!r}")
+        if key in _BSWV_RANGES:
+            low, high = _BSWV_RANGES[key]
+            if not low <= num <= high:
+                raise ValueError(f"{where}: {num:g} outside {low:g}..{high:g} (PG02 §3.3/§3.4)")
 
 
 def validate_setup(setup: Setup, limits: ModelLimits | None) -> None:
@@ -303,6 +333,9 @@ def _validate_bswv_combination(channel: str, bswv: Mapping[str, object]) -> None
     levels = [k for k in _LEVEL_KEYS if k in bswv]
     if amps and levels:
         raise ValueError(f"{_where(channel, 'BSWV')}: {amps[0]} cannot be combined with {levels[0]}")
+    if "OFST" in bswv and levels:
+        # HLEV/LLEV redefine the offset (offset = (HLEV + LLEV) / 2), so OFST would contradict them
+        raise ValueError(f"{_where(channel, 'BSWV')}: OFST cannot be combined with {levels[0]}")
     if "FRQ" in bswv and "PERI" in bswv:
         raise ValueError(f"{_where(channel, 'BSWV')}: set only one of FRQ and PERI")
 
@@ -319,17 +352,23 @@ def _validate_limits(
                 f"{_where(channel, 'BSWV', 'FRQ')}: {frq:g} Hz exceeds {limits.model} {wvtp} "
                 f"limit {limits.max_freq_hz[wvtp]:g} Hz"
             )
+    # The reduced limits apply at any numeric load; no LOAD in this setup or 'HZ' means the HiZ limits.
+    numeric_load = _number(outp.get("LOAD")) is not None
+    load_text = "into a numeric load" if numeric_load else "into HiZ"
     amp = _number(bswv.get("AMP"))
     if amp is not None:
-        if _number(outp.get("LOAD")) == 50.0:
-            max_amp = limits.max_amp_vpp_50
-            load_text = "into 50 ohm"
-        else:
-            max_amp = limits.max_amp_vpp_hiz
-            load_text = "into HiZ"
+        max_amp = limits.max_amp_vpp_50 if numeric_load else limits.max_amp_vpp_hiz
         if amp > max_amp:
             raise ValueError(
                 f"{_where(channel, 'BSWV', 'AMP')}: {amp:g} Vpp exceeds {limits.model} limit {max_amp:g} Vpp {load_text}"
+            )
+    ofst = _number(bswv.get("OFST"))
+    if ofst is not None:
+        # hypothesis until hardware session 1: the offset limit halves at a numeric load, like the amplitude
+        max_ofst = limits.max_offset_v_hiz / 2 if numeric_load else limits.max_offset_v_hiz
+        if abs(ofst) > max_ofst:
+            raise ValueError(
+                f"{_where(channel, 'BSWV', 'OFST')}: {ofst:g} V exceeds {limits.model} limit +-{max_ofst:g} V {load_text}"
             )
 
 
@@ -351,8 +390,6 @@ def order_setup(channel_setup: Mapping[str, Mapping[str, object]]) -> list[tuple
     for key in ("LOAD", "PLRT"):  # PG02 §3.3
         if key in outp:
             triples.append(("OUTP", key, outp[key]))
-    # keys of the OUTP group that are neither of the above (none valid today): keep the caller's order
-    triples.extend(("OUTP", k, v) for k, v in outp.items() if k not in OUTP_KEYS)
     bswv_order = ("WVTP", "FRQ", "PERI", *_AMPLITUDE_KEYS, "OFST", *_LEVEL_KEYS)  # PG02 §3.4
     for key in bswv_order:
         if key in bswv:

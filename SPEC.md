@@ -80,7 +80,7 @@ Validity of BSWV keys per `WVTP` (from the "Description" column of PG02 §3.4; e
 `BSWV_KEY_WAVE_TYPES: Mapping[str, frozenset[str]]`):
 `FRQ PERI AMP AMPVRMS AMPDBM HLEV LLEV`: not NOISE, not DC. `OFST`: not NOISE. `PHSE`: not NOISE, PULSE, DC.
 `SYM`: RAMP only. `DUTY`: SQUARE, PULSE only. `WIDTH RISE FALL`: PULSE only. `STDEV MEAN BANDSTATE BANDWIDTH`: NOISE only.
-`DLY`, `MAX_OUTPUT_AMP`, `WVTP`: any type (PG02 states no restriction).
+`MAX_OUTPUT_AMP`, `WVTP`: any type (PG02 states no restriction). `DLY`: PULSE only (PG02 states no restriction; hypothesis until hardware session 1, so that the validator and the fake agree); like the other type-specific keys it needs `WVTP` in the same channel setup.
 
 | name | behaviour |
 |---|---|
@@ -91,11 +91,12 @@ Validity of BSWV keys per `WVTP` (from the "Description" column of PG02 §3.4; e
 | `format_value(value: object) -> str` | `bool`→`ON`/`OFF`; `int`→`str(int)`; `float`→`format(v, '.9G')` (PG02 accepts exponent form, §3.4 example `100E6`; whether `1E-06` is accepted is a hardware item); `str`→unchanged; other types `TypeError` |
 | `build_bswv(channel: int, key: str, value: object) -> str` | `f'{ch}:BSWV {key},{format_value(value)}'` (§3.4) |
 | `build_outp(channel: int, key: str, value: object) -> str` | `STATE` → `f'{ch}:OUTP {ON\|OFF}'`; `LOAD`/`PLRT` → `f'{ch}:OUTP {key},{format_value(value)}'` (§3.3 examples) |
+| `build_command(channel: int, group: str, key: str, value: object) -> str` | `build_outp` for group `OUTP`, `build_bswv` for `BSWV`, else `ValueError`; used by the plug wherever it writes a `(group, key, value)` triple |
 | `parse_reply(raw: str, expect_header: str, leading_key: str \| None = None) -> Reply` | split at the first space; header must equal `expect_header` (e.g. `C1:BSWV`) else `ProtocolError`; body split on `,`; if `leading_key` is given the first token is stored under it (used for OUTP's bare `ON\|OFF`, §3.3); remaining tokens must pair up, else `ProtocolError` |
 | `strip_unit(text: str) -> float \| str` | `^([-+]?(\d+\.?\d*\|\.\d+)([eE][-+]?\d+)?)\s*([A-Za-z%/]*)$` → `float` of the number; otherwise the string unchanged. Must handle `100HZ 0.01S 2V -1V 0 1.41421Vrms 3dBm 50% 100E6 2.4e-07S` → floats and `HZ SINE ON NOR` → str |
 | `typed_fields(reply: Reply) -> dict[str, float \| str]` | `strip_unit` over every field |
 | `values_match(key: str, sent: object, got: float \| str) -> bool` | `bool` sent: compare `ON`/`OFF` case-insensitively; `str` sent vs `str` got: case-insensitive equality; number sent vs number got: `math.isclose(sent, got, rel_tol=REL_TOL.get(key, 1e-6), abs_tol=ABS_TOL.get(key, 0.0))` with module-level tables `ABS_TOL = {AMP, AMPVRMS, OFST, HLEV, LLEV, STDEV, MEAN, MAX_OUTPUT_AMP: 1e-3; PHSE, DUTY, SYM: 1e-2}` marked provisional; number vs str or str vs number → `False` |
-| `validate_setup(setup: Setup, limits: ModelLimits \| None) -> None` | raises `ValueError` naming the offending channel/group/key **before anything is sent**: channel not in `CHANNELS`; group not in `{OUTP, BSWV}`; key not in the group's key set; `WVTP` not in `WAVE_TYPES`; a BSWV key invalid for the `WVTP` of the same channel setup (if no `WVTP` is given, type-specific keys are rejected with a message saying `WVTP` is required alongside them); more than one of `AMP AMPVRMS AMPDBM`, or any of them together with `HLEV`/`LLEV`; both `FRQ` and `PERI`; `LOAD` not (number in 50..100000 or the string `HZ`, case-insensitive); `PLRT` not `NOR`/`INVT`; `STATE` not bool or `ON`/`OFF`; if `limits` is given: `FRQ` above `limits.max_freq_hz[WVTP]` when that entry exists, `AMP` above `limits.max_amp_vpp_hiz`, or above `limits.max_amp_vpp_50` when the same channel sets `LOAD` to 50 |
+| `validate_setup(setup: Setup, limits: ModelLimits \| None) -> None` | raises `ValueError` naming the offending channel/group/key **before anything is sent**: channel not in `CHANNELS`; group not in `{OUTP, BSWV}`; key not in the group's key set; `WVTP` not in `WAVE_TYPES`; a BSWV key invalid for the `WVTP` of the same channel setup (if no `WVTP` is given, type-specific keys are rejected with a message saying `WVTP` is required alongside them); more than one of `AMP AMPVRMS AMPDBM`, or any of them, or `OFST`, together with `HLEV`/`LLEV` (the levels redefine amplitude and offset); `PHSE` outside 0..360, `SYM` or `DUTY` outside 0..100 (§3.4), `MAX_OUTPUT_AMP` outside 1..20 (§3.3); both `FRQ` and `PERI`; `LOAD` not (number in 50..100000 or the string `HZ`, case-insensitive); `PLRT` not `NOR`/`INVT`; `STATE` not bool or `ON`/`OFF`; if `limits` is given: `FRQ` above `limits.max_freq_hz[WVTP]` when that entry exists, `AMP` above `limits.max_amp_vpp_hiz`, or above `limits.max_amp_vpp_50` when the same channel sets `LOAD` to any number (`HZ` or no `LOAD` keeps the HiZ limit); `abs(OFST)` above `limits.max_offset_v_hiz`, or above half of it when the same channel sets a numeric `LOAD` (the halving is a hypothesis until hardware session 1) |
 | `order_setup(channel_setup: Mapping[str, Mapping[str, object]]) -> list[tuple[str, str, object]]` | returns `(group, key, value)` triples in this order: 1 `OUTP STATE` if it is off; 2 `OUTP LOAD`; 3 `OUTP PLRT`; 4 `BSWV WVTP`; 5 `BSWV FRQ` or `PERI`; 6 `BSWV AMP`/`AMPVRMS`/`AMPDBM` then `OFST`, or `HLEV` then `LLEV`; 7 all other BSWV keys in the caller's order; 8 `OUTP STATE` if it is on. Reason for 2 before 6: reports say switching LOAD between HZ and 50 rescales the displayed amplitude (hypothesis, see README); the safe order costs nothing |
 
 ## 3. `models.py`
@@ -137,7 +138,8 @@ CONF.declare('siglent_sdg_check_limits', default_value=True, description='reject
 - If `resource is None`: `pyvisa.ResourceManager('@py')`; name = `CONF.siglent_sdg_resource`:
   contains `::` → used as is; non-empty without `::` → `f'TCPIP0::{name}::inst0::INSTR'` (PG02 §1, VXI-11);
   empty → first entry of `rm.list_resources('USB?*::INSTR')` whose second `::` field, parsed with
-  `int(field, 0)`, equals `0xF4EC` (pyvisa-py may report the vendor in decimal); none → `RuntimeError` with
+  `int(field, 0)`, equals `0xF4EC` (pyvisa-py may report the vendor in decimal), preferring one whose serial
+  (4th `::` field) starts with `SDG` over other Siglent instruments; none → `RuntimeError` with
   a clear message. Keep the `ResourceManager` to close it in `tearDown`.
 - Set `timeout = CONF.siglent_sdg_timeout_ms`, `read_termination = '\n'`, `write_termination = '\n'`
   (PG02 §5.2.1; required for the SOCKET resource).
@@ -164,7 +166,7 @@ Methods (SCPI exactly as written):
 
 `apply_setup`:
 1. `validate_setup(setup, self.limits if CONF.siglent_sdg_check_limits else None)`; on `ValueError` nothing is sent.
-2. For each channel in the setup, write the `order_setup` triples with `build_outp` / `build_bswv`.
+2. For each channel in the setup, write the `order_setup` triples with `build_command`.
 3. If `verify`: for each touched channel query `<ch>:BSWV?` if BSWV keys were sent and `<ch>:OUTP?` if OUTP
    keys were sent (these queries are also the completion barrier, §3.1.2). For each sent key: missing in the
    reply → failure `C1:BSWV FRQ: not echoed by the generator`; `values_match` false → failure

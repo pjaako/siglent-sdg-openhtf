@@ -70,7 +70,7 @@ _BSWV_KEYS_OTHER_FAMILIES: Final = frozenset(
 
 _ALL_TYPES: Final = _WAVE_TYPES
 # Which WVTP a key is valid for: the "Description" column of PG02 §3.4 ("Not valid when WVTP is NOISE or DC",
-# "Only settable when WVTP is RAMP", ...). DLY, MAX_OUTPUT_AMP and WVTP carry no restriction in PG02.
+# "Only settable when WVTP is RAMP", ...). MAX_OUTPUT_AMP and WVTP carry no restriction in PG02; DLY is modelled for PULSE only.
 _KEY_VALID_FOR: Final[dict[str, frozenset[str]]] = {
     "WVTP": _ALL_TYPES,
     "FRQ": _ALL_TYPES - {"NOISE", "DC"},
@@ -91,7 +91,7 @@ _KEY_VALID_FOR: Final[dict[str, frozenset[str]]] = {
     "MEAN": frozenset({"NOISE"}),
     "BANDSTATE": frozenset({"NOISE"}),
     "BANDWIDTH": frozenset({"NOISE"}),
-    "DLY": _ALL_TYPES,
+    "DLY": frozenset({"PULSE"}),  # hypothesis until hardware session 1 (echoed for PULSE only)
     "MAX_OUTPUT_AMP": _ALL_TYPES,
 }
 
@@ -189,7 +189,7 @@ class FakeSdgResource:
         # Attributes the plug sets on a real resource.
         self.timeout: float | None = 2000.0
         self.read_termination: str | None = "\n"
-        self.write_termination: str | None = "\r\n"
+        self.write_termination: str | None = "\n"  # PG02 §5.2.1
         self.chunk_size: int = 20480
         self.log: list[str] = []  # every string given to write() and query(), in order
         self.closed: bool = False

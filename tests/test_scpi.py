@@ -20,6 +20,7 @@ from siglent_sdg_openhtf.scpi import (
     Setup,
     SetupError,
     build_bswv,
+    build_command,
     build_outp,
     channel_name,
     format_value,
@@ -75,7 +76,7 @@ def test_constants() -> None:
         ("MEAN", {"NOISE"}),
         ("BANDSTATE", {"NOISE"}),
         ("BANDWIDTH", {"NOISE"}),
-        ("DLY", set(WAVE_TYPES)),  # PG02 states no restriction
+        ("DLY", {"PULSE"}),  # PG02 states no restriction; PULSE-only is a hypothesis (fake echoes it for PULSE only)
         ("WVTP", set(WAVE_TYPES)),
         ("MAX_OUTPUT_AMP", set(WAVE_TYPES)),  # PG02 §3.3
     ],
@@ -166,6 +167,19 @@ def test_build_bswv(channel: int, key: str, value: object, expected: str) -> Non
 )
 def test_build_outp(channel: int, key: str, value: object, expected: str) -> None:
     assert build_outp(channel, key, value) == expected
+
+
+def test_build_command_dispatches_to_outp_and_bswv() -> None:
+    assert build_command(1, "OUTP", "LOAD", 50) == "C1:OUTP LOAD,50"  # PG02 §3.3
+    assert build_command(2, "OUTP", "STATE", True) == "C2:OUTP ON"  # PG02 §3.3
+    assert build_command(1, "BSWV", "FRQ", 2000) == "C1:BSWV FRQ,2000"  # PG02 §3.4
+    assert build_command(2, "BSWV", "WVTP", "RAMP") == "C2:BSWV WVTP,RAMP"  # PG02 §3.4
+
+
+@pytest.mark.parametrize("group", ["MODU", "bswv", ""])
+def test_build_command_rejects_other_groups(group: str) -> None:
+    with pytest.raises(ValueError, match="group"):
+        build_command(1, group, "FRQ", 1)
 
 
 def test_build_outp_unknown_key() -> None:
@@ -478,6 +492,19 @@ def test_validate_accepts_both_channels_and_all_types() -> None:
         ({"C1": {"BSWV": {"AMP": 1.0, "AMPVRMS": 1.0}}}, "AMPVRMS"),
         ({"C1": {"BSWV": {"AMPDBM": 1.0, "AMPVRMS": 1.0}}}, "AMPDBM"),
         ({"C1": {"BSWV": {"FRQ": 1.0, "PERI": 1.0}}}, "PERI"),
+        ({"C1": {"BSWV": {"OFST": 0.0, "HLEV": 1.0}}}, "OFST"),  # HLEV/LLEV redefine the offset
+        ({"C1": {"BSWV": {"OFST": 0.0, "LLEV": -1.0}}}, "OFST"),
+        ({"C1": {"BSWV": {"HLEV": 1.0, "LLEV": -1.0, "OFST": 0.0}}}, "OFST"),
+        ({"C1": {"BSWV": {"WVTP": "SINE", "PHSE": 361.0}}}, "PHSE"),  # PG02 §3.4: 0..360
+        ({"C1": {"BSWV": {"WVTP": "SINE", "PHSE": -0.5}}}, "PHSE"),
+        ({"C1": {"BSWV": {"WVTP": "RAMP", "SYM": 100.5}}}, "SYM"),  # PG02 §3.4: 0..100
+        ({"C1": {"BSWV": {"WVTP": "RAMP", "SYM": -1.0}}}, "SYM"),
+        ({"C1": {"BSWV": {"WVTP": "SQUARE", "DUTY": 101.0}}}, "DUTY"),  # PG02 §3.4: 0..100
+        ({"C1": {"BSWV": {"WVTP": "PULSE", "DUTY": -1.0}}}, "DUTY"),
+        ({"C1": {"BSWV": {"MAX_OUTPUT_AMP": 0.5}}}, "MAX_OUTPUT_AMP"),  # PG02 §3.3: 1..20
+        ({"C1": {"BSWV": {"MAX_OUTPUT_AMP": 20.5}}}, "MAX_OUTPUT_AMP"),
+        ({"C1": {"BSWV": {"WVTP": "SINE", "DLY": 0.0}}}, "DLY"),  # PULSE-only (hypothesis)
+        ({"C1": {"BSWV": {"DLY": 0.0}}}, "WVTP"),  # type-specific: WVTP required alongside
         ({"C1": {"OUTP": {"LOAD": 10}}}, "LOAD"),
         ({"C1": {"OUTP": {"LOAD": 100001}}}, "LOAD"),
         ({"C1": {"OUTP": {"LOAD": "INF"}}}, "LOAD"),
@@ -534,9 +561,79 @@ def test_validate_amp_limit_hiz_and_50() -> None:
     with pytest.raises(ValueError, match="AMP"):
         validate_setup({"C1": {"OUTP": {"LOAD": 50.0}, "BSWV": {"AMP": 10.5}}}, limits)
     validate_setup({"C1": {"OUTP": {"LOAD": 50}, "BSWV": {"AMP": 10.0}}}, limits)
-    validate_setup({"C1": {"OUTP": {"LOAD": 100}, "BSWV": {"AMP": 15.0}}}, limits)  # only 50 ohm is limited
+    # the reduced limit applies at any numeric load, not only 50 ohm
+    with pytest.raises(ValueError, match="AMP"):
+        validate_setup({"C1": {"OUTP": {"LOAD": 100}, "BSWV": {"AMP": 15.0}}}, limits)
+    validate_setup({"C1": {"OUTP": {"LOAD": 100}, "BSWV": {"AMP": 10.0}}}, limits)
+    validate_setup({"C1": {"OUTP": {"LOAD": "hz"}, "BSWV": {"AMP": 15.0}}}, limits)  # HZ keeps the HiZ limit
     # LOAD of another channel does not count
     validate_setup({"C1": {"OUTP": {"LOAD": 50}}, "C2": {"BSWV": {"AMP": 15.0}}}, limits)
+
+
+def test_validate_offset_limit_hiz_and_numeric_load() -> None:
+    limits = models.limits_for("SDG2042X")  # max_offset_v_hiz = 10
+    validate_setup({"C1": {"BSWV": {"OFST": 10.0}}}, limits)
+    validate_setup({"C1": {"BSWV": {"OFST": -10.0}}}, limits)
+    validate_setup({"C1": {"OUTP": {"LOAD": "HZ"}, "BSWV": {"OFST": 10.0}}}, limits)
+    with pytest.raises(ValueError, match="C1 BSWV OFST"):
+        validate_setup({"C1": {"BSWV": {"OFST": 10.5}}}, limits)
+    with pytest.raises(ValueError, match="OFST"):
+        validate_setup({"C1": {"BSWV": {"OFST": -10.5}}}, limits)
+    # hypothesis: half the HiZ limit at a numeric load
+    validate_setup({"C1": {"OUTP": {"LOAD": 50}, "BSWV": {"OFST": 5.0}}}, limits)
+    with pytest.raises(ValueError, match="OFST"):
+        validate_setup({"C1": {"OUTP": {"LOAD": 50}, "BSWV": {"OFST": 5.5}}}, limits)
+    with pytest.raises(ValueError, match="OFST"):
+        validate_setup({"C1": {"OUTP": {"LOAD": 1000}, "BSWV": {"OFST": -6.0}}}, limits)
+    validate_setup({"C1": {"BSWV": {"OFST": 50.0}}}, None)  # limits check off
+    # the limit comes from the model table, so the field is live
+    tight = limits._replace(max_offset_v_hiz=2.0)
+    with pytest.raises(ValueError, match="OFST"):
+        validate_setup({"C1": {"BSWV": {"OFST": 3.0}}}, tight)
+
+
+@pytest.mark.parametrize(
+    "setup",
+    [
+        {"C1": {"BSWV": {"WVTP": "SINE", "PHSE": 0.0}}},
+        {"C1": {"BSWV": {"WVTP": "SINE", "PHSE": 360.0}}},
+        {"C1": {"BSWV": {"WVTP": "RAMP", "SYM": 0.0}}},
+        {"C1": {"BSWV": {"WVTP": "RAMP", "SYM": 100.0}}},
+        {"C1": {"BSWV": {"WVTP": "SQUARE", "DUTY": 0.0}}},
+        {"C1": {"BSWV": {"WVTP": "PULSE", "DUTY": 100.0, "DLY": 0.001}}},
+        {"C1": {"BSWV": {"MAX_OUTPUT_AMP": 1.0}}},
+        {"C1": {"BSWV": {"MAX_OUTPUT_AMP": 20}}},
+    ],
+)
+def test_validate_accepts_documented_range_edges(setup: Setup) -> None:
+    validate_setup(setup, None)
+
+
+def test_validate_range_errors_name_channel_group_key() -> None:
+    with pytest.raises(ValueError, match=r"C2 BSWV PHSE"):
+        validate_setup({"C2": {"BSWV": {"PHSE": 400.0}}}, None)
+
+
+@pytest.mark.parametrize(("value", "ok"), [(True, True), ("on", True), (" Off ", True), ("MAYBE", False), (1, False)])
+def test_on_off_rule_is_the_same_for_state_bandstate_and_order(value: object, ok: bool) -> None:
+    state: Setup = {"C1": {"OUTP": {"STATE": value}}}
+    band: Setup = {"C1": {"BSWV": {"WVTP": "NOISE", "BANDSTATE": value}}}
+    if ok:
+        validate_setup(state, None)
+        validate_setup(band, None)
+    else:
+        with pytest.raises(ValueError, match="STATE"):
+            validate_setup(state, None)
+        with pytest.raises(ValueError, match="BANDSTATE"):
+            validate_setup(band, None)
+
+
+def test_padded_on_is_on_everywhere() -> None:
+    assert build_outp(1, "STATE", " on ") == "C1:OUTP ON"
+    triples = order_setup({"OUTP": {"STATE": " ON ", "LOAD": 50}})
+    assert _keys(triples) == [("OUTP", "LOAD"), ("OUTP", "STATE")]  # on goes last
+    triples = order_setup({"OUTP": {"STATE": " off ", "LOAD": 50}})
+    assert _keys(triples) == [("OUTP", "STATE"), ("OUTP", "LOAD")]  # off goes first
 
 
 def test_validate_setup_is_pure() -> None:
