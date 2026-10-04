@@ -22,7 +22,7 @@ Secrets (real IP, serial number, probe dumps) never go here; they live in the gi
 | T2 | `scpi.py` + `models.py` + `tests/test_scpi.py` | done |
 | T3 | `fake_resource.py` + `tests/test_fake_resource.py` | done |
 | T4 | `plug.py` + `tests/test_plug.py` | done |
-| T5 | `example_test.py`, `tools/probe.py`, `tests/test_examples.py`, README usage | todo |
+| T5 | `example_test.py`, `tools/probe.py`, `tests/test_examples.py`, README usage | done |
 | STOP | First hardware session: owner runs `tools/probe.py` and `example_test.py` on the SDG2042X | blocked on hardware access |
 | T6 | Fold hardware findings into the fake, README "Things the manual does not tell you", tolerances | after STOP |
 | T7 | `SPEC-station.md` → `examples/station_demo.py` with rigol-dho-openhtf | after T6 |

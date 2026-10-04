@@ -30,8 +30,7 @@ testpaths = ["tests"]
 
 [tool.mypy]
 strict = true
-# T5 must add "example_test.py" and "tools" here when it creates them: mypy fails on a missing path.
-files = ["src", "tests"]
+files = ["src", "tests", "example_test.py", "tools"]
 
 [[tool.mypy.overrides]]
 module = ["openhtf", "openhtf.*", "pyvisa", "pyvisa.*"]
