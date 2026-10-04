@@ -33,27 +33,39 @@ the owner's: give an agent access to the SDG2042X and run `tools/probe.py` (see 
 | T4 | `plug.py` + `tests/test_plug.py` | done |
 | T5 | `example_test.py`, `tools/probe.py`, `tests/test_examples.py`, README usage | done |
 | R1 | Review fix-up round (validation ranges, limits at numeric load, closed-plug errors, USB preference) | done |
-| STOP | First hardware session: owner runs `tools/probe.py` and `example_test.py` on the SDG2042X | **next, blocked on hardware access** |
+| STOP | First hardware session: `tools/probe.py` and `example_test.py` on the SDG2042X, from a local session on the LAN | **next: local session (see Hardware access)** |
 | T6 | Fold hardware findings into the fake, README "Things the manual does not tell you", tolerances | after STOP |
 | T7 | `SPEC-station.md` → `examples/station_demo.py` with rigol-dho-openhtf | after T6 |
 | later | SPEC-arb, SPEC-modulation, SPEC-counter-sync | each needs a hardware session |
 
 ## Hardware access
 
-First session, step by step (agent or human):
+**Decision (2026-10-04): the first hardware session runs in a local Claude Code session on a machine on
+the generator's LAN.** A cloud session cannot reach the generator: the cloud container only passes
+HTTPS on port 443 through an inspecting egress gateway; raw TCP (port 5025) and non-TLS tunnels are
+blocked by design, which was tested with a forwarded port and ruled out. PR #1
+(https://github.com/pjaako/siglent-sdg-openhtf/pull/1) stays watched by the cloud owner agent; the owner merges.
+
+Kickoff for the local session (agent or human), on the LAN machine:
 ```bash
-uv sync --all-extras --dev
-uv run python tools/probe.py --resource 'TCPIP0::192.0.2.10::5025::SOCKET'   # raw socket; or TCPIP0::<ip>::inst0::INSTR on the LAN
+git clone https://github.com/pjaako/siglent-sdg-openhtf && cd siglent-sdg-openhtf
+git checkout claude/modest-carson-349c1k
+uv sync --all-extras --dev && uv run pytest -q && uv run mypy      # must be green before touching hardware
+uv run python tools/probe.py --resource 'TCPIP0::192.0.2.10::5025::SOCKET'   # real IP instead of 192.0.2.10
 # read dumps/probe-*.md; if the generator survived everything, once more with --risky (SYST:ERR?, *CLS)
 uv run python example_test.py --resource 192.0.2.10
 ```
-The probe never changes LAN settings and ends with both outputs off. Keep the generator's power switch
-within reach for the `--risky` run.
+The probe only sends PG02-documented commands (the two `--risky` ones excepted), never changes LAN
+settings, and ends with both outputs off. Keep the power switch within reach for `--risky`. Expect the
+first `example_test.py` run to fail if real replies differ from the PG02 examples (for instance a bare
+`MAX_OUTPUT_AMP` token or `AMPVRMS` fields); the probe report shows the raw replies either way.
 
-Not available from the cloud session. Options agreed with the owner: forward the generator's raw socket
-port 5025 to the internet (VXI-11 uses the portmapper and dynamic ports, which forward badly), or
-continue on a machine on the generator's LAN. The first hardware session runs `tools/probe.py`
-(items listed in `SPEC.md` §8) and records the results in README and in the fake.
+Then T6: with the probe report in hand, write `SPEC-hardware-1.md` (Rigol SPEC template, "measured
+facts" section filled from the report, real address and serial replaced by placeholders) and delegate
+to a coder: fake defaults, key sets per WVTP, number formats, tolerances, `parse_reply` tolerance if a
+dangling key is real; README "Facts (measured on the generator)" and "Things the manual does not tell
+you"; firmware version in README's first paragraph. Real addresses, serial and the dumps stay in
+git-ignored `HANDOFF.md` / `dumps/`. Commit with the attribution lines from AGENTS.md and push to this branch.
 
 ## Open questions
 
