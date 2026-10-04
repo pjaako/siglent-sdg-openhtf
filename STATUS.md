@@ -50,9 +50,9 @@ uv run python example_test.py --resource 192.0.2.10
 The probe never changes LAN settings and ends with both outputs off. Keep the generator's power switch
 within reach for the `--risky` run.
 
-Not available from the cloud session. Options agreed with the owner: forward the generator's raw socket
-port 5025 to the internet (VXI-11 uses the portmapper and dynamic ports, which forward badly), or
-continue on a machine on the generator's LAN. The first hardware session runs `tools/probe.py`
+Decision (2026-10-04): the owner forwards the generator's raw socket port 5025 to the internet and the
+cloud owner agent runs the probe (VXI-11 uses the portmapper and dynamic ports, which forward badly).
+PR #1 (https://github.com/pjaako/siglent-sdg-openhtf/pull/1) is watched by the owner agent; the owner merges. The first hardware session runs `tools/probe.py`
 (items listed in `SPEC.md` §8) and records the results in README and in the fake.
 
 ## Open questions
