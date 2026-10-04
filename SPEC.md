@@ -207,7 +207,7 @@ opened one. Idempotent: a second call does nothing. Never raises.
   (§3.3); `Cn:BSWV?` → per `WVTP`: SINE/ARB `WVTP,FRQ<HZ>,PERI<S>,AMP<V>,OFST<V>,HLEV<V>,LLEV<V>,PHSE` (SINE string
   for defaults must equal `C1:BSWV WVTP,SINE,FRQ,100HZ,PERI,0.01S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0`
   exactly, §3.4); SQUARE adds `DUTY` after `PHSE`; RAMP adds `SYM`; PULSE is `WVTP,FRQ,PERI,AMP,OFST,HLEV,LLEV,
-  WIDTH<S>,RISE<S>,FALL<S>,DLY<S>` (no `PHSE`); NOISE is `WVTP,STDEV<V>,MEAN<V>,BANDSTATE` plus `BANDWIDTH<HZ>`
+  DUTY,WIDTH<S>,RISE<S>,FALL<S>,DLY<S>` (no `PHSE`; `DUTY` is settable for PULSE per §3.4); NOISE is `WVTP,STDEV<V>,MEAN<V>,BANDSTATE` plus `BANDWIDTH<HZ>`
   when `BANDSTATE` is `ON`; DC is `WVTP,OFST<V>`. Every non-SINE key set is a hypothesis derived from the
   §3.4 validity rules; say so in a comment. Anything else → `ValueError('undefined query: ...')`.
 - Number formatting `_num(x, unit)`: integers without decimal point (`100HZ`, `2V`, `0V`), otherwise the
@@ -233,8 +233,10 @@ sends nothing (it is pure); `limits_for` known / unknown-SDG2 / other.
 `HLEV`/`LLEV` set `AMP`/`OFST`; `WVTP,SQUARE` adds `DUTY`, `WVTP,PULSE` drops `PHSE`, `WVTP,NOISE` has only its
 keys, `WVTP,DC` only `OFST`; `FRQ` 50e6 ignored on SDG2042X; `DUTY` ignored while SINE; `reject` logs but does not
 apply; `raise_on` raises; undefined write and query raise `ValueError`; `*RST` restores defaults; `*OPC?` is `1`;
-`log` order; `close()`; a subprocess test asserting `'pyvisa' not in sys.modules and 'openhtf' not in sys.modules`
-after `import siglent_sdg_openhtf.fake_resource`.
+`log` order; `close()`; a subprocess test that loads `fake_resource.py` **by file path** (`importlib.util.spec_from_file_location`,
+so the package `__init__`, which imports the plug, is not executed) and asserts `'pyvisa' not in sys.modules and
+'openhtf' not in sys.modules`; plus an `ast` test that the fake's source imports nothing from `pyvisa`, `openhtf` or
+`siglent_sdg_openhtf`.
 
 `tests/test_plug.py` (helper `_plug(**fake_kwargs) -> tuple[SiglentSdgPlug, FakeSdgResource]`) — `identity`
 and `limits` after construction; `get_basic_wave` typed values (`FRQ` 100.0, `WVTP` `SINE`); `get_output`
