@@ -3,33 +3,45 @@
 Handoff state for whoever picks this up next, human or agent. Keep it current; it is committed.
 Secrets (real IP, serial number, probe dumps) never go here; they live in the git-ignored `HANDOFF.md`.
 
-## Where we are (2026-10-05)
+## Where we are (2026-10-05, end of day)
 
-**The first hardware session is done; v1 core works on the real SDG2042X (firmware 2.01.01.23R7, VXI-11).**
-`tools/probe.py` (plain and `--risky`) and `example_test.py --resource <ip>` ran on the generator from a
-local session, branch `hardware-session-1`. Measured facts: `SPEC-hardware-1.md`; verbatim transcript:
-`tests/data/hardware_session_1.txt`; T6 folds them into the fake, the validator and README.
+`main` holds everything; nothing relevant is left only on a local machine (see "What is not on GitHub").
+The day in short:
 
-- Research done: no OpenHTF plug exists for the SDG2000X family; the design mirrors `rigol-dho-openhtf`.
-- Official programming guide PG02-E05C is in `docs/` (PDF + text). It is the only source of SCPI.
-- Owner decisions: LAN primary, USB optional; v1 = `*IDN?`, `*RST`, `BSWV`, `OUTP`, `apply_setup`
-  with read-back verification; `tearDown` = outputs off; proper package + CI; Python 3.13;
-  Sonnet coder agents implement, owner agent specs/reviews/integrates.
-- R1 (review fix-up) is done: validator tightened (OFST with HLEV/LLEV, PHSE/SYM/DUTY/MAX_OUTPUT_AMP ranges, reduced
-  amplitude limit at any numeric load, OFST limit), `build_command`, `plug closed` error after `tearDown`, USB
-  discovery prefers `SDG` serials, version from package metadata, fake `write_termination` `\n`. Hypotheses added
-  (all `# hypothesis until hardware session 1`): `DLY` is PULSE-only; the offset limit halves at a numeric load.
-- `SPEC.md` (v1 core) is written. Placeholders: `SPEC-arb.md`, `SPEC-modulation.md`,
-  `SPEC-counter-sync.md`, `SPEC-station.md`.
+- **v1 core** (`*IDN?`, `*RST`, `OUTP`, `BSWV`, `apply_setup` with read-back verification) works on the real
+  SDG2042X, firmware 2.01.01.23R7, over VXI-11. Facts: `SPEC-hardware-1.md`, README.
+- **Station demo** (`examples/station_demo.py`): generator into a Rigol DHO814 in one OpenHTF test; passes on
+  both instruments and with `--fake`. The scope plug is the package `rigol-dho-openhtf`, extra `station`,
+  pinned in `[tool.uv.sources]`. Facts: `SPEC-station.md`.
+- **Modulation, sweep, burst** (`MDWV`, `SWWV`, `BTWV` groups): verified by read-back on the generator with
+  outputs off. The signal was not measured. Facts: `SPEC-modulation.md`.
+- 652 tests, `mypy --strict` clean, CI green on `main`.
 
-**Station demo (T7) is done:** `examples/station_demo.py` drives the generator and a Rigol DHO814 in one
-OpenHTF test and passes on the instruments; `--fake` runs it without hardware. The scope plug comes from the
-package `rigol-dho-openhtf` (extra `station`, pinned in `[tool.uv.sources]`). Next: task V1 when a 50 ohm
-terminator is at hand, V2, then the `later` specs.
+## Start here tomorrow
 
-**Modulation, sweep and burst (T8) are in:** three more groups in the setup data, verified by read-back on
-the generator with outputs off. Facts and three verbatim transcripts: `SPEC-modulation.md`,
-`tests/data/hardware_modulation_*.txt`.
+1. `uv sync --all-extras --dev && uv run pytest -q && uv run mypy`.
+2. Ask the human two things before any hardware work: the generator's address (it is not in git), and
+   whether a 50 ohm feed-through terminator is at hand (task V1 has been waiting for one since 2026-10-05;
+   remind him if it is not).
+3. Next task by default: **V2** (below). It needs the generator and the scope cabled CH1 to CH1.
+4. Then `SPEC-arb.md` or `SPEC-counter-sync.md` (placeholders): recon on the generator first, then the
+   spec, then a coder, then acceptance. The owner picks.
+
+How a feature gets done here (it worked three times on 2026-10-05): recon on the instrument with a script
+that logs every command and reply; the sanitized log becomes a transcript in `tests/data/` that the fake
+must replay verbatim; spec; coder against the fake only; then acceptance by the owner agent: a fresh
+command sequence sent to the fake and the instrument at once, every reply compared. Each such run found
+rules the recon had missed (10, 14 and 5 of them). Differences go back to the coder as numbered facts plus
+a new transcript. Last, the plug itself on the instrument: valid setups must verify, wrong ones must raise.
+
+## What is not on GitHub (by design)
+
+- `HANDOFF.md`: the real address and serial number of the generator, and notes on private dumps.
+- `dumps/`: raw probe logs and the owner's one-off scripts (they contain the address). Everything measured
+  is in the committed transcripts and SPEC files, without the address.
+- On a new machine: the generator's address comes from the human; the scope on USB needs the udev rule of
+  the `rigol-dho-openhtf` repository and membership in group `plugdev`; pushing needs working GitHub
+  credentials (`gh auth login`), which the previous machine's agent did not have.
 
 ## Task board
 
@@ -47,7 +59,7 @@ the generator with outputs off. Facts and three verbatim transcripts: `SPEC-modu
 | T7 | `SPEC-station.md` → `examples/station_demo.py` with rigol-dho-openhtf | done, accepted on both instruments 2026-10-05 |
 | V1 | Hardware check: signal levels with `LOAD,50` and a real 50 ohm load at the output (a feed-through terminator at the scope input). Expect the scope to read what `BSWV?` shows. The agent must ask the human to fit the terminator first, and to remove it afterwards. | open, needs the human |
 | T8 | `SPEC-modulation.md`: `MDWV`, `SWWV`, `BTWV` as setup groups, fake, tests | done; read-back accepted on the generator 2026-10-05, signal not measured |
-| V2 | Hardware check: modulation, sweep and burst at the output with the scope (AM depth, sweep range, burst cycle count) | open |
+| V2 | Hardware check: modulation, sweep and burst at the output with the scope (AM depth, sweep range, burst cycle count). Keep the open-circuit peak under 5 V at the scope input, save the scope state first, outputs off at the end. Start from `examples/station_demo.py`. | **next** |
 | later | SPEC-arb, SPEC-counter-sync | each needs a hardware session |
 
 ## Hardware access
@@ -76,9 +88,12 @@ fixed, the manager is no longer closed.
 
 ## Open questions
 
-- Not modelled or not measured in session 1 (README "Things the manual does not tell you",
-  `SPEC-hardware-1.md` addendum): the load rescale for loads other than 50 ohm, the PULSE width limit with
-  long edges, the level window above 20 MHz at a numeric load, SDG2082X/SDG2122X limits, USB.
+- Not modelled or not measured (README "Things the manual does not tell you", the addenda of
+  `SPEC-hardware-1.md` and `SPEC-modulation.md`): the load rescale for loads other than 50 ohm, the PULSE
+  width limit with long edges, the level window above 20 MHz at a numeric load, the minimum burst delay,
+  the PWM deviation limit, SDG2082X/SDG2122X limits, USB on the generator.
 - Is the raw socket on port 5025 switched off by a setting or missing in firmware 2.01.01.23R7?
-- Nothing was measured at the BNC connectors: session 1 verified the read-back, not the signal. T7 (scope
-  on the output) closes that.
+- The scope plug has two wishes open on its side (not blocking): a helper that writes a whole state to a
+  file, and a `measure()` that hides the first `9.9E+37`.
+- Housekeeping for the human: the merged remote branches `station-demo`, `hardware-session-1`, `modulation`
+  and `claude/modest-carson-349c1k` can be deleted.
