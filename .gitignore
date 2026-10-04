@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+*.egg-info/
+dist/
+build/
+HANDOFF.md
+dumps/
+examples/results/
+opencode.json
+opencode.jsonl
+opencode.err
+.serena/
