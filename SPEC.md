@@ -156,9 +156,9 @@ Methods (SCPI exactly as written):
 | `opc()` | `*OPC?` (§3.1.2) | `bool`, `reply.strip() == '1'` |
 | `reset()` | `*RST` then `*OPC?` (§3.1.3, §3.1.2) | `None`; `ProtocolError` if `*OPC?` is not `1` |
 | `get_basic_wave(channel: int)` | `<ch>:BSWV?` (§3.4) | `dict[str, float \| str]` via `parse_reply(raw, f'{ch}:BSWV')` and `typed_fields` |
-| `set_basic_wave(channel: int, params: Mapping[str, object])` | one `<ch>:BSWV <key>,<value>` per key (§3.4), in `order_setup` order | `None`; no verification |
+| `set_basic_wave(channel: int, params: Mapping[str, object])` | one `<ch>:BSWV <key>,<value>` per key (§3.4), in `order_setup` order | `None`; validated first like `apply_setup`, no read-back |
 | `get_output(channel: int)` | `<ch>:OUTP?` (§3.3) | `dict` with `STATE` (`ON`/`OFF`), `LOAD` (`HZ` or float), `PLRT`, via `parse_reply(raw, f'{ch}:OUTP', leading_key='STATE')` |
-| `set_output(channel: int, params: Mapping[str, object])` | `<ch>:OUTP ...` per key (§3.3), in `order_setup` order | `None` |
+| `set_output(channel: int, params: Mapping[str, object])` | `<ch>:OUTP ...` per key (§3.3), in `order_setup` order | `None`; validated first, no read-back |
 | `apply_setup(setup: Setup, *, verify: bool = True)` | see below | `None` |
 | `tearDown()` | `C1:OUTP OFF`, `C2:OUTP OFF` (§3.3) | `None` |
 

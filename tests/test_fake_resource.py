@@ -267,7 +267,7 @@ def test_wvtp_pulse_drops_phse() -> None:
     fake.write("C1:BSWV WVTP,PULSE")
     assert fake.query("C1:BSWV?") == (
         "C1:BSWV WVTP,PULSE,FRQ,100HZ,PERI,0.01S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,"
-        "WIDTH,0.000001S,RISE,0.00000001S,FALL,0.00000001S,DLY,0S"
+        "DUTY,50,WIDTH,0.000001S,RISE,0.00000001S,FALL,0.00000001S,DLY,0S"
     )
     assert "PHSE" not in bswv(fake)
 
@@ -286,6 +286,17 @@ def test_pulse_keys_settable() -> None:
         "0.000003S",
         "0.001S",
     )
+
+
+def test_pulse_duty_settable() -> None:
+    # PG02 3.4: DUTY is settable for SQUARE or PULSE; its position in the PULSE reply is a hypothesis
+    fake = FakeSdgResource()
+    fake.write("C1:BSWV WVTP,PULSE")
+    fake.write("C1:BSWV DUTY,30")
+    fields = bswv(fake)
+    assert fields["DUTY"] == "30"
+    keys = list(fields)
+    assert keys[keys.index("LLEV") + 1 : keys.index("LLEV") + 3] == ["DUTY", "WIDTH"]
 
 
 def test_pulse_phse_ignored() -> None:
@@ -716,12 +727,19 @@ def test_no_exponent_notation_in_replies() -> None:
 
 
 def test_module_does_not_pull_in_pyvisa_or_openhtf() -> None:
-    # The fake is an independent oracle: importing it must not import pyvisa or openhtf.
+    # The fake is an independent oracle: loading it must not import pyvisa or openhtf. It is loaded by file
+    # path so that the package __init__ (which imports the plug, hence openhtf and pyvisa) is not executed.
     code = (
-        "import sys\n"
-        "import siglent_sdg_openhtf.fake_resource\n"
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('fake_resource_isolated', {fake_resource.__file__!r})\n"
+        "assert spec is not None and spec.loader is not None\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "sys.modules['fake_resource_isolated'] = module\n"
+        "spec.loader.exec_module(module)\n"
+        "assert hasattr(module, 'FakeSdgResource')\n"
         "assert 'pyvisa' not in sys.modules, 'pyvisa imported'\n"
         "assert 'openhtf' not in sys.modules, 'openhtf imported'\n"
+        "assert 'siglent_sdg_openhtf' not in sys.modules, 'package imported'\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr

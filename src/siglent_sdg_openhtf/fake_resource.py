@@ -464,8 +464,10 @@ class FakeSdgResource:
             common()
             fields.append(("PHSE", _num(channel.phse)))
             fields.append(("SYM", _num(channel.sym)))
-        elif wvtp == "PULSE":  # no PHSE (§3.4: not valid for PULSE)
+        elif wvtp == "PULSE":  # no PHSE (§3.4: not valid for PULSE); DUTY is settable for SQUARE or PULSE (§3.4)
+            # DUTY in the PULSE reply: hypothesis until hardware session 1
             common()
+            fields.append(("DUTY", _num(channel.duty)))
             fields.append(("WIDTH", _num(channel.width, "S")))
             fields.append(("RISE", _num(channel.rise, "S")))
             fields.append(("FALL", _num(channel.fall, "S")))

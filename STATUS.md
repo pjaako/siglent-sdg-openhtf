@@ -21,7 +21,7 @@ Secrets (real IP, serial number, probe dumps) never go here; they live in the gi
 | T1 | Packaging: pyproject, uv.lock, package skeleton, CI, test_import | done |
 | T2 | `scpi.py` + `models.py` + `tests/test_scpi.py` | done |
 | T3 | `fake_resource.py` + `tests/test_fake_resource.py` | done |
-| T4 | `plug.py` + `tests/test_plug.py` | todo |
+| T4 | `plug.py` + `tests/test_plug.py` | done |
 | T5 | `example_test.py`, `tools/probe.py`, `tests/test_examples.py`, README usage | todo |
 | STOP | First hardware session: owner runs `tools/probe.py` and `example_test.py` on the SDG2042X | blocked on hardware access |
 | T6 | Fold hardware findings into the fake, README "Things the manual does not tell you", tolerances | after STOP |
@@ -42,3 +42,7 @@ continue on a machine on the generator's LAN. The first hardware session runs `t
   without a value)?
 - Does `SYST:ERR?` exist on this firmware? It is not in PG02. Probe item 11, risky.
 - How to import `rigol-dho-openhtf` for the station demo (it has no `pyproject.toml`).
+- Does `C1:BSWV?` echo `AMPVRMS`/`AMPDBM` (PG02 §3.3 response format lists `AMPVRMS`, the §3.4 example
+  does not)? Until measured, `apply_setup` with `verify=True` reports those keys as "not echoed"; use `AMP`.
+- Does the generator reject `HLEV` below the current `LLEV`? The fake assumes so (hypothesis); the plug
+  writes `HLEV` then `LLEV`.
