@@ -3,7 +3,8 @@
 The fake is an independent oracle: it imports nothing from ``pyvisa``, ``openhtf`` or any other module of
 this package (a shared parser would hide parser bugs), and it is the only instrument coder agents may talk
 to. It emulates the v1 command subset: ``*IDN?``, ``*OPC``/``*OPC?``, ``*RST``, ``<ch>:OUTP`` and
-``<ch>:BSWV`` with their queries.
+``<ch>:BSWV`` with their queries, and ``<ch>:MDWV`` (PG02 §3.5), ``<ch>:SWWV`` (§3.6.1) and ``<ch>:BTWV``
+(§3.7) as the modulation recon of 2026-10-05 measured them (README).
 
 The only source of SCPI is the official Siglent guide, ``docs/PG02-E05C.txt`` ("PG02"). Section numbers in
 the comments below refer to it, and the SDG2000X column of its availability tables is the one that counts.
@@ -19,7 +20,7 @@ out-of-range values without any sign; only commands that PG02 does not define ra
 import math
 import re
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
 
 __all__ = ["FakeSdgResource"]
@@ -120,6 +121,49 @@ _CHANNELS: Final = ("C1", "C2")
 _OUTP_HEADERS: Final = frozenset({"OUTP", "OUTPUT"})
 _BSWV_HEADERS: Final = frozenset({"BSWV", "BASIC_WAVE"})
 
+# Modulation, sweep and burst: PG02 §3.5 "MoDulateWaVe", §3.6.1 "SweepWaVe", §3.7 "BursTWaVe" (short MDWV, SWWV,
+# BTWV). Long spellings accepted like the BSWV ones.   # hypothesis until a hardware session
+_MDWV_HEADERS: Final = frozenset({"MDWV", "MODULATEWAVE"})
+_SWWV_HEADERS: Final = frozenset({"SWWV", "SWEEPWAVE"})
+_BTWV_HEADERS: Final = frozenset({"BTWV", "BURSTWAVE"})
+_MOD_TYPES: Final = ("AM", "DSBAM", "FM", "PM", "PWM", "ASK", "FSK", "PSK")  # PG02 §3.5 <type>
+# Own parameters per type, in reply order (measured, modulation recon (README))
+_MD_FIELDS: Final = {
+    "AM": ("MDSP", "SRC", "FRQ", "DEPTH"),
+    "DSBAM": ("MDSP", "SRC", "FRQ"),
+    "FM": ("MDSP", "SRC", "FRQ", "DEVI"),
+    "PM": ("MDSP", "SRC", "FRQ", "DEVI"),
+    "PWM": ("MDSP", "SRC", "FRQ", "DEVI"),
+    "ASK": ("SRC", "KFRQ"),
+    "FSK": ("SRC", "KFRQ", "HFRQ"),
+    "PSK": ("SRC", "KFRQ", "PLRT"),
+}
+_MDWV_KEYS: Final = frozenset({"STATE", "SRC", "MDSP", "FRQ", "DEPTH", "DEVI", "KFRQ", "HFRQ", "PLRT"})  # PG02 §3.5
+_MDSP_VALUES: Final = frozenset({"SINE", "SQUARE", "TRIANGLE", "UPRAMP", "DNRAMP", "NOISE", "ARB"})  # PG02 §3.5
+_SWWV_KEYS: Final = frozenset(  # PG02 §3.6.1
+    {
+        "STATE", "TIME", "STARTTIME", "ENDTIME", "BACKTIME", "START", "STOP", "CENTER", "SPAN", "SWMD", "DIR",
+        "SYM", "TRSR", "TRMD", "EDGE", "MARK_STATE", "MARK_FREQ",
+    }
+)  # fmt: skip
+_BTWV_KEYS: Final = frozenset(  # PG02 §3.7
+    {"STATE", "PRD", "STPS", "GATE_NCYC", "TRSR", "DLAY", "PLRT", "TRMD", "EDGE", "TIME", "COUNT"}
+)
+# CARR,<key> parameters PG02 lists for each command (§3.5, §3.6.1, §3.7)
+_CARR_KEYS_MDWV: Final = frozenset({"WVTP", "FRQ", "PHSE", "AMP", "OFST", "SYM", "DUTY", "RISE", "FALL", "DLY"})
+_CARR_KEYS_SWWV: Final = frozenset({"WVTP", "FRQ", "PHSE", "AMP", "OFST", "SYM", "DUTY"})
+_CARR_KEYS_BTWV: Final = _CARR_KEYS_MDWV | {"STDEV", "MEAN"}
+# BSWV fields that the carrier part of a modulation reply leaves out   # measured, modulation recon (README)
+_CARRIER_OMIT: Final = frozenset({"PERI", "HLEV", "LLEV", "WIDTH", "BANDSTATE", "BANDWIDTH"})  # AMPDBM stays (A3)
+_MD_FRQ_MIN: Final = 0.001  # AM and FSK HFRQ measured; the same for KFRQ: hypothesis until a hardware session
+_MD_FRQ_MAX: Final = 1e6
+_SW_MIN: Final = 1e-6  # smallest START   # measured, modulation recon (README)
+_SW_TIME_MIN: Final = 0.001
+_SW_TIME_MAX: Final = 500.0
+_BT_TIME_MAX: Final = 1000000
+_BT_DLAY_MAX: Final = 100.0
+_PWM_DEVI_DEFAULT: Final = 0.00019
+
 _WRITE_RE: Final = re.compile(r"^(C[12]):([A-Za-z_]+)(?:\s+(.*))?$", re.IGNORECASE)
 _QUERY_RE: Final = re.compile(r"^(C[12]):([A-Za-z_]+)\?$", re.IGNORECASE)
 _NUMBER_RE: Final = re.compile(r"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$")
@@ -155,6 +199,24 @@ def _k(load: int | None) -> float:
 
 
 @dataclass
+class _Mod:
+    """Own values of one modulation type; every type keeps its own set. # measured, modulation recon (README)"""
+
+    mdsp: str = "SINE"
+    src: str = "INT"
+    frq: float = 100.0
+    depth: float = 100.0
+    devi: float = 100.0
+    kfrq: float = 100.0
+    hfrq: float = 1e6
+    plrt: str = "POS"
+
+
+def _mod_defaults() -> dict[str, _Mod]:
+    return {t: _Mod(devi=_PWM_DEVI_DEFAULT if t == "PWM" else 100.0) for t in _MOD_TYPES}
+
+
+@dataclass
 class _Channel:
     """State of one channel. Field defaults are the ``*RST`` state, measured in hardware session 1 (README).
 
@@ -179,6 +241,24 @@ class _Channel:
     dly: float = 0.0
     bandstate: str = "OFF"
     bandwidth: float = 120e6
+    # Modulation, sweep, burst. At most one is on; all are off after *RST.   # measured, modulation recon (README)
+    mod: str | None = None  # "MDWV", "SWWV", "BTWV" or None
+    md_type: str = "AM"  # never PWM: PWM is what the type reads while the carrier is PULSE
+    md: dict[str, _Mod] = field(default_factory=_mod_defaults)
+    sw_time: float = 1.0
+    sw_start: float = 500.0
+    sw_stop: float = 1500.0
+    sw_trsr: str = "INT"
+    sw_trmd: str = "OFF"
+    sw_swmd: str = "LINE"
+    sw_dir: str = "UP"
+    bt_prd: float = 0.01
+    bt_trsr: str = "INT"
+    bt_time: int | None = 1  # None = INF
+    bt_dlay: float = 6.04035e-07
+    bt_trmd: str = "OFF"
+    bt_mode: str = "NCYC"
+    bt_plrt: str = "NEG"
 
 
 class FakeSdgResource:
@@ -260,6 +340,15 @@ class FakeSdgResource:
                 if header in _BSWV_HEADERS:  # PG02 §3.4
                     self._write_bswv(channel, tokens, cmd)
                     return
+                if header in _MDWV_HEADERS:  # PG02 §3.5
+                    self._write_mod(channel, "MDWV", tokens, cmd)
+                    return
+                if header in _SWWV_HEADERS:  # PG02 §3.6.1
+                    self._write_mod(channel, "SWWV", tokens, cmd)
+                    return
+                if header in _BTWV_HEADERS:  # PG02 §3.7
+                    self._write_mod(channel, "BTWV", tokens, cmd)
+                    return
         raise ValueError(f"undefined command: {cmd}")
 
     def _write_outp(self, channel: _Channel, tokens: list[str], cmd: str) -> None:
@@ -313,6 +402,9 @@ class FakeSdgResource:
             if channel.wvtp not in _KEY_VALID_FOR[key]:
                 continue  # silently ignored: key not valid for the current WVTP. measured, hardware session 1 (README)
             self._set_bswv(channel, key, value)
+            self._carrier_changed(channel)
+            if key == "WVTP":  # a WVTP written through BSWV switches all three off   # measured, modulation recon (README)
+                channel.mod = None
 
     def _set_bswv(self, channel: _Channel, key: str, text: str) -> None:
         if key == "WVTP":
@@ -329,9 +421,11 @@ class FakeSdgResource:
         factor = _VRMS_FACTOR.get(channel.wvtp)
         if key == "FRQ":
             self._set_frq(channel, value)
+            self._sweep_follow_carrier(channel)
         elif key == "PERI":  # PERI = 1/FRQ
             if value > 0:
                 self._set_frq(channel, 1 / value)
+                self._sweep_follow_carrier(channel)
         elif key == "AMP":
             self._set_amp(channel, value)
         elif key == "AMPVRMS":
@@ -367,12 +461,18 @@ class FakeSdgResource:
         if channel.wvtp == "PULSE":  # leaving PULSE turns its delay into the phase   # measured, hardware session 1 (README)
             channel.phse = _snap(-360 * channel.dly * channel.frq)
         channel.wvtp = wvtp  # every other value survives the change   # measured, hardware session 1 (README)
+        before = channel.frq
         self._set_frq(channel, channel.frq)  # frequency (and with it SQUARE duty, PULSE width) clamped for the new type
+        if channel.frq != before:  # a clamped carrier frequency: the sweep follows (A12)   # measured, modulation recon (README)
+            self._sweep_follow_carrier(channel)
 
     def _set_frq(self, channel: _Channel, frq: float) -> None:
         # Clamped to 0 .. the type's maximum; 0 Hz is accepted (PERI then reads inf).   # measured, hardware session 1 (README)
         limit = self._limits.max_freq_hz.get(channel.wvtp)
         channel.frq = max(frq, 0.0) if limit is None else min(max(frq, 0.0), limit)
+        fm = channel.md["FM"]
+        fm.frq = min(fm.frq, channel.frq)  # the FM modulating frequency too (A10)   # measured, modulation recon (README)
+        fm.devi = min(fm.devi, channel.frq)  # the FM deviation follows a falling carrier   # measured, modulation recon (README)
         if channel.wvtp == "PULSE":  # the width in seconds survives, clamped to the new period
             self._set_width(channel, channel.width)
         elif channel.wvtp == "SQUARE":  # the duty is clamped again and stays clamped
@@ -434,6 +534,298 @@ class FakeSdgResource:
         # MAX_OUTPUT_AMP (PG02 §3.3): accepted, no visible effect   # measured, hardware session 1 (README)
 
     # ----------------------------------------------------------------------------------------------------
+    # Modulation, sweep, burst (PG02 §3.5, §3.6.1, §3.7)
+    # ----------------------------------------------------------------------------------------------------
+
+    def _write_mod(self, channel: _Channel, cmd_name: str, tokens: list[str], cmd: str) -> None:
+        keys = {"MDWV": _MDWV_KEYS, "SWWV": _SWWV_KEYS, "BTWV": _BTWV_KEYS}[cmd_name]
+        carrier_keys = {"MDWV": _CARR_KEYS_MDWV, "SWWV": _CARR_KEYS_SWWV, "BTWV": _CARR_KEYS_BTWV}[cmd_name]
+        # Grammar first: an undefined command applies nothing. Tokens read left to right: a bare type
+        # (MDWV only) selects it and the pairs after it belong to it; ``CARR,<key>,<value>`` is a carrier
+        # write; MTRIG (SWWV, BTWV) is a bare token.   # measured, modulation recon (README)
+        ops: list[tuple[str, str, str | None]] = []
+        i = 0
+        while i < len(tokens):
+            token = tokens[i].upper()
+            value = tokens[i + 1] if i + 1 < len(tokens) else None
+            if cmd_name == "MDWV" and token in _MOD_TYPES:
+                ops.append(("TYPE", token, None))
+                i += 1
+            elif cmd_name != "MDWV" and token == "MTRIG":
+                ops.append(("MTRIG", token, None))
+                i += 1
+            elif token == "CARR":
+                carr_key = (value or "").upper()
+                if carr_key not in carrier_keys:
+                    raise ValueError(f"undefined command: {cmd}")
+                ops.append(("CARR", carr_key, tokens[i + 2] if i + 2 < len(tokens) else None))
+                i += 3
+            elif token in keys:
+                ops.append(("SET", token, value))
+                i += 2
+            else:
+                raise ValueError(f"undefined command: {cmd}")
+        cur: str | None = None
+        for kind, key, value in ops:
+            if kind == "CARR":
+                # Applied also while the state is OFF.   # measured, modulation recon (README)
+                if value is not None and channel.wvtp in _KEY_VALID_FOR[key]:
+                    self._set_bswv(channel, key, value)
+                    self._carrier_changed(channel)
+            elif kind == "SET" and key == "STATE":
+                self._set_mod_state(channel, cmd_name, value)
+            elif channel.mod != cmd_name and cmd_name != "SWWV":
+                # MDWV and BTWV: every other parameter is ignored while the state is OFF. The sweep applies
+                # them (A1)   # measured, modulation recon (README)
+                continue
+            elif kind == "TYPE":
+                cur = key
+                if channel.wvtp != "PULSE" and key != "PWM":  # PWM only with a PULSE carrier, and PULSE only PWM
+                    channel.md_type = key
+            elif cmd_name == "MDWV":
+                if value is not None and (cur or self._md_effective_type(channel)) == self._md_effective_type(channel):
+                    self._set_md(channel, key, value)
+            elif cmd_name == "SWWV":
+                if value is not None:
+                    self._set_sw(channel, key, value)
+            elif kind == "MTRIG":
+                pass  # accepted, changes nothing in the reply
+            elif value is not None:
+                self._set_bt(channel, key, value)
+
+    @staticmethod
+    def _md_effective_type(channel: _Channel) -> str:
+        return "PWM" if channel.wvtp == "PULSE" else channel.md_type  # measured, modulation recon (README)
+
+    @staticmethod
+    def _set_mod_state(channel: _Channel, cmd_name: str, text: str | None) -> None:
+        state = (text or "").upper()
+        if state == "OFF":
+            # STATE,OFF of any of the three commands switches the active one off (A15).   # measured, modulation recon (README)
+            channel.mod = None
+        elif state == "ON":
+            wvtp = channel.wvtp
+            # A carrier that does not allow the mode keeps it off.   # measured, modulation recon (README)
+            blocked = {"MDWV": {"NOISE", "DC"}, "SWWV": {"PULSE", "NOISE", "DC"}, "BTWV": {"NOISE", "DC"}}[cmd_name]
+            if wvtp not in blocked:
+                channel.mod = cmd_name  # the three are exclusive per channel   # measured, modulation recon (README)
+
+    def _carrier_changed(self, channel: _Channel) -> None:
+        """A carrier that does not allow the active mode switches it off (measured, modulation recon (README):
+        MDWV with NOISE or DC, SWWV with PULSE, NOISE or DC, BTWV with DC). A NOISE carrier forces the burst into GATE mode and it stays there."""
+        wvtp = channel.wvtp
+        if (
+            (channel.mod == "MDWV" and wvtp in ("NOISE", "DC"))
+            or (channel.mod == "SWWV" and wvtp in ("PULSE", "NOISE", "DC"))
+            or (channel.mod == "BTWV" and wvtp == "DC")
+        ):
+            channel.mod = None
+        if channel.mod == "BTWV" and wvtp == "NOISE":
+            channel.bt_mode = "GATE"
+
+    def _set_md(self, channel: _Channel, key: str, text: str) -> None:
+        mtype = self._md_effective_type(channel)
+        if key not in _MD_FIELDS[mtype]:
+            return  # a key that does not belong to the type is ignored
+        mod = channel.md[mtype]
+        upper = text.upper()
+        if key == "SRC":
+            if upper in ("INT", "EXT"):  # CH1 and CH2 are not accepted   # measured, modulation recon (README)
+                mod.src = upper
+        elif key == "MDSP":
+            if upper in _MDSP_VALUES:
+                mod.mdsp = upper
+        elif key == "PLRT":
+            if upper in ("POS", "NEG"):
+                mod.plrt = upper
+        else:
+            value = _parse_number(text)
+            if value is None:
+                return
+            if key == "FRQ":
+                top = min(_MD_FRQ_MAX, channel.frq) if mtype == "FM" else _MD_FRQ_MAX  # FM: not above the carrier
+                mod.frq = min(max(value, _MD_FRQ_MIN), top)  # measured, modulation recon (README)
+            elif key == "KFRQ":
+                mod.kfrq = min(max(value, _MD_FRQ_MIN), _MD_FRQ_MAX)
+            elif key == "DEPTH":
+                mod.depth = min(max(value, 0.0), 120.0)
+            elif key == "HFRQ":
+                limit = self._limits.max_freq_hz.get(channel.wvtp)
+                mod.hfrq = max(value, _MD_FRQ_MIN) if limit is None else min(max(value, _MD_FRQ_MIN), limit)
+            elif key == "DEVI":
+                if mtype == "FM":  # 0 .. the carrier frequency
+                    mod.devi = min(max(value, 0.0), channel.frq)
+                elif mtype == "PM":  # 0 .. 360
+                    mod.devi = min(max(value, 0.0), 360.0)
+                else:  # PWM: no limit measured   # hypothesis until a hardware session
+                    mod.devi = max(value, 0.0)
+
+    def _sweep_follow_carrier(self, channel: _Channel) -> None:
+        """The carrier frequency moves START and STOP, keeping the span.   # measured, modulation recon (README)"""
+        if channel.mod != "SWWV":
+            return
+        limit = self._limits.max_freq_hz.get(channel.wvtp, math.inf)
+        # also respects the carrier type's maximum (A11)   # measured, modulation recon (README)
+        half = min((channel.sw_stop - channel.sw_start) / 2, channel.frq - _SW_MIN, limit - channel.frq)
+        channel.sw_start = channel.frq - half
+        channel.sw_stop = channel.frq + half
+
+    def _set_sw(self, channel: _Channel, key: str, text: str) -> None:
+        upper = text.upper()
+        if key == "SWMD":
+            if upper in ("LINE", "LOG"):  # STEP is ignored
+                channel.sw_swmd = upper
+        elif key == "DIR":
+            if upper in ("UP", "DOWN"):  # UP_DOWN is ignored
+                channel.sw_dir = upper
+        elif key == "TRSR":
+            if upper in ("INT", "EXT", "MAN"):
+                channel.sw_trsr = upper
+                if upper == "EXT":  # EXT resets TRMD   # measured, modulation recon (README)
+                    channel.sw_trmd = "OFF"
+        elif key == "TRMD":
+            if upper in ("ON", "OFF"):
+                channel.sw_trmd = upper
+                if channel.sw_trsr == "EXT":  # writing TRMD while TRSR is EXT switches TRSR to INT
+                    channel.sw_trsr = "INT"
+        elif key in ("TIME", "START", "STOP"):
+            value = _parse_number(text)
+            if value is None:
+                return
+            if key == "TIME":
+                channel.sw_time = min(max(value, _SW_TIME_MIN), _SW_TIME_MAX)
+                return
+            if key == "START":  # not above STOP, not below 1e-6
+                channel.sw_start = min(max(value, _SW_MIN), channel.sw_stop)
+            else:  # not below START, not above the carrier type's maximum
+                limit = self._limits.max_freq_hz.get(channel.wvtp, math.inf)
+                channel.sw_stop = min(max(value, channel.sw_start), limit)
+            self._set_frq(channel, (channel.sw_start + channel.sw_stop) / 2)  # the sweep owns the carrier frequency
+        # CENTER, SPAN, SYM, EDGE, MARK_STATE, MARK_FREQ, STARTTIME, ENDTIME, BACKTIME: accepted, never echoed
+
+    def _set_bt(self, channel: _Channel, key: str, text: str) -> None:
+        upper = text.upper()
+        wvtp = channel.wvtp
+        gate = channel.bt_mode == "GATE"
+        if key == "GATE_NCYC":
+            if upper in ("GATE", "NCYC") and wvtp != "NOISE":
+                channel.bt_mode = upper
+                if upper == "GATE" and channel.bt_trsr == "MAN":  # GATE with MAN switches TRSR to INT (A13)
+                    channel.bt_trsr = "INT"
+        elif key == "TRSR":
+            # While TIME is INF, INT is refused (A9)   # measured, modulation recon (README)
+            if upper in ("EXT", "MAN") or (upper == "INT" and channel.bt_time is not None):
+                self._bt_trsr(channel, upper)
+        elif key == "TRMD":
+            if upper in ("RISE", "FALL", "OFF") and channel.bt_trsr != "EXT" and not gate:  # ignored in GATE mode (A14)  # shown under INT and MAN (A8)
+                channel.bt_trmd = upper
+        elif key == "PLRT":
+            if upper in ("POS", "NEG"):
+                channel.bt_plrt = upper
+        elif key == "TIME":
+            if gate or wvtp == "NOISE":  # DLAY and TIME writes are ignored in GATE mode
+                return
+            if upper == "INF":  # infinite burst: the trigger source becomes EXT
+                channel.bt_time = None
+                self._bt_trsr(channel, "EXT")
+                return
+            value = _parse_number(text)
+            if value is not None:
+                channel.bt_time = min(max(int(value), 1), _BT_TIME_MAX)
+        elif key == "PRD":
+            value = _parse_number(text)
+            # Only written under TRSR INT; under EXT and MAN the write is ignored. The minimum that depends
+            # on the carrier is not modelled.
+            if value is not None and value > 0 and channel.bt_trsr == "INT" and wvtp != "NOISE":
+                channel.bt_prd = value
+        elif key == "DLAY":
+            value = _parse_number(text)
+            if value is not None and not gate and wvtp != "NOISE":  # the minimum of about 0.6 us is not modelled
+                channel.bt_dlay = min(max(value, 0.0), _BT_DLAY_MAX)
+        elif key == "STPS":  # the same value as the carrier PHSE
+            if wvtp in _KEY_VALID_FOR["PHSE"]:
+                self._set_bswv(channel, "PHSE", text)
+        # EDGE and COUNT: accepted, never echoed
+
+    @staticmethod
+    def _bt_trsr(channel: _Channel, trsr: str) -> None:
+        channel.bt_trsr = trsr
+        if trsr == "EXT":  # EXT resets TRMD   # measured, modulation recon (README)
+            channel.bt_trmd = "OFF"
+
+    def _mod_reply(self, name: str, cmd_name: str, channel: _Channel) -> str:
+        # Shapes: measured, modulation recon (README); PG02 §3.5, §3.6.1, §3.7 give no sample reply.
+        if channel.mod != cmd_name:
+            return f"{name}:{cmd_name} STATE,OFF"
+        if cmd_name == "MDWV":
+            own = self._mdwv_tokens(channel)
+        elif cmd_name == "SWWV":
+            own = self._swwv_tokens(channel)
+        elif channel.wvtp == "NOISE":  # the burst mode stays GATE, but only PLRT is echoed
+            own = ["PLRT", channel.bt_plrt]
+        else:
+            own = self._btwv_tokens(channel)
+        carrier = [token for k, v in _bswv_fields(channel) if k not in _CARRIER_OMIT for token in (k, v)]
+        return f"{name}:{cmd_name} " + ",".join(["STATE", "ON", *own, "CARR", *carrier])
+
+    def _mdwv_tokens(self, channel: _Channel) -> list[str]:
+        mtype = self._md_effective_type(channel)
+        mod = channel.md[mtype]
+        tokens = [mtype]  # the type is a bare token
+        for key in _MD_FIELDS[mtype]:
+            if mod.src == "EXT" and key != "SRC":
+                continue  # with SRC,EXT only SRC,EXT remains
+            if key == "FRQ" and mod.mdsp == "NOISE":
+                continue
+            if key == "MDSP":
+                value = mod.mdsp
+            elif key == "SRC":
+                value = mod.src
+            elif key == "PLRT":
+                value = mod.plrt
+            elif key == "DEPTH":
+                value = _g(mod.depth)
+            elif key == "DEVI":
+                value = _g(mod.devi) + {"FM": "HZ", "PM": "", "PWM": "S"}[mtype]
+            else:  # FRQ, KFRQ, HFRQ: like the carrier frequency
+                value = _g({"FRQ": mod.frq, "KFRQ": mod.kfrq, "HFRQ": mod.hfrq}[key], 10) + "HZ"
+            tokens += [key, value]
+        return tokens
+
+    @staticmethod
+    def _swwv_tokens(channel: _Channel) -> list[str]:
+        tokens = [
+            "TIME", _g(channel.sw_time) + "S",
+            "STOP", _g(channel.sw_stop) + "HZ",
+            "START", _g(channel.sw_start) + "HZ",
+            "TRSR", channel.sw_trsr,
+        ]  # fmt: skip
+        if channel.sw_trsr != "EXT":
+            tokens += ["TRMD", channel.sw_trmd]
+        tokens += ["SWMD", channel.sw_swmd, "DIR", channel.sw_dir]
+        if channel.sw_trsr == "EXT":
+            tokens += ["EDGE", "RISE"]
+        return tokens
+
+    @staticmethod
+    def _btwv_tokens(channel: _Channel) -> list[str]:
+        tokens: list[str] = []
+        trsr = channel.bt_trsr
+        if trsr == "INT":
+            tokens += ["PRD", _g(channel.bt_prd) + "S"]
+        if channel.wvtp != "PULSE":
+            tokens += ["STPS", _g(channel.phse)]
+        tokens += ["TRSR", trsr]
+        if channel.bt_mode == "GATE":
+            tokens += ["GATE_NCYC", "GATE", "PLRT", channel.bt_plrt]
+        else:
+            if trsr != "EXT":
+                tokens += ["TRMD", channel.bt_trmd]
+            time = "INF" if channel.bt_time is None else str(channel.bt_time)
+            tokens += ["TIME", time, "DLAY", _g(channel.bt_dlay) + "S", "GATE_NCYC", "NCYC"]
+        return tokens
+
+    # ----------------------------------------------------------------------------------------------------
     # ----------------------------------------------------------------------------------------------------
     # Queries
     # ----------------------------------------------------------------------------------------------------
@@ -452,6 +844,12 @@ class FakeSdgResource:
                 return self._outp_reply(name, self._channels[name])
             if header in _BSWV_HEADERS:  # PG02 §3.4 query <channel>:BaSic_WaVe?
                 return self._bswv_reply(name, self._channels[name])
+            if header in _MDWV_HEADERS:  # PG02 §3.5
+                return self._mod_reply(name, "MDWV", self._channels[name])
+            if header in _SWWV_HEADERS:  # PG02 §3.6.1
+                return self._mod_reply(name, "SWWV", self._channels[name])
+            if header in _BTWV_HEADERS:  # PG02 §3.7
+                return self._mod_reply(name, "BTWV", self._channels[name])
         raise ValueError(f"undefined query: {cmd}")
 
     @staticmethod
@@ -463,45 +861,50 @@ class FakeSdgResource:
 
     @staticmethod
     def _bswv_reply(name: str, channel: _Channel) -> str:
-        # Key sets, order, units and number formats: measured, hardware session 1 (README). PG02 §3.4 sample
-        # reply is the shape: C1:BSWV WVTP,SINE,FRQ,100HZ,PERI,0.01S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
-        wvtp = channel.wvtp
-        fields: list[tuple[str, str]] = [("WVTP", wvtp)]
-        if wvtp == "NOISE":
-            fields.append(("STDEV", _g(_snap(channel.amp * _STDEV_PER_AMP)) + "V"))
-            fields.append(("MEAN", _g(channel.ofst) + "V"))
-            fields.append(("BANDSTATE", channel.bandstate))
-            if channel.bandstate == "ON":
-                fields.append(("BANDWIDTH", _g(channel.bandwidth, 10) + "HZ"))
-        elif wvtp == "DC":
-            fields.append(("OFST", _g(channel.dc_ofst) + "V"))
-        else:
-            fields.append(("FRQ", _g(channel.frq, 10) + "HZ"))
-            fields.append(("PERI", (_g(1 / channel.frq) if channel.frq > 0 else "inf") + "S"))
-            fields.append(("AMP", _g(channel.amp) + "V"))
-            factor = _VRMS_FACTOR.get(wvtp)  # ARB has neither AMPVRMS nor AMPDBM
-            if factor is not None:
-                vrms = channel.amp * factor
-                fields.append(("AMPVRMS", _g(vrms) + "Vrms"))
-                if channel.load is not None:  # AMPDBM only at a numeric load (RAMP: guess)
-                    fields.append(("AMPDBM", _g(_snap(10 * math.log10(vrms**2 / channel.load / 0.001), 9)) + "dBm"))
-            fields.append(("OFST", _g(channel.ofst) + "V"))
-            fields.append(("HLEV", _g(_snap(channel.ofst + channel.amp / 2)) + "V"))
-            fields.append(("LLEV", _g(_snap(channel.ofst - channel.amp / 2)) + "V"))
-            if wvtp == "PULSE":  # no PHSE
-                fields.append(("DUTY", _g(100 * channel.width * channel.frq)))
-                fields.append(("WIDTH", _g(channel.width)))
-                fields.append(("RISE", _g(channel.rise) + "S"))
-                fields.append(("FALL", _g(channel.fall) + "S"))
-                fields.append(("DLY", _g(channel.dly)))
-            else:
-                fields.append(("PHSE", _g(channel.phse)))
-                if wvtp == "SQUARE":
-                    fields.append(("DUTY", _g(channel.duty)))
-                elif wvtp == "RAMP":
-                    fields.append(("SYM", _g(channel.sym)))
-        body = ",".join(token for pair in fields for token in pair)
+        body = ",".join(token for pair in _bswv_fields(channel) for token in pair)
         return f"{name}:BSWV {body}"
+
+
+def _bswv_fields(channel: _Channel) -> list[tuple[str, str]]:
+    """The body of the BSWV reply as (key, value) pairs; also the carrier part of the modulation replies."""
+    # Key sets, order, units and number formats: measured, hardware session 1 (README). PG02 §3.4 sample
+    # reply is the shape: C1:BSWV WVTP,SINE,FRQ,100HZ,PERI,0.01S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+    wvtp = channel.wvtp
+    fields: list[tuple[str, str]] = [("WVTP", wvtp)]
+    if wvtp == "NOISE":
+        fields.append(("STDEV", _g(_snap(channel.amp * _STDEV_PER_AMP)) + "V"))
+        fields.append(("MEAN", _g(channel.ofst) + "V"))
+        fields.append(("BANDSTATE", channel.bandstate))
+        if channel.bandstate == "ON":
+            fields.append(("BANDWIDTH", _g(channel.bandwidth, 10) + "HZ"))
+    elif wvtp == "DC":
+        fields.append(("OFST", _g(channel.dc_ofst) + "V"))
+    else:
+        fields.append(("FRQ", _g(channel.frq, 10) + "HZ"))
+        fields.append(("PERI", (_g(1 / channel.frq) if channel.frq > 0 else "inf") + "S"))
+        fields.append(("AMP", _g(channel.amp) + "V"))
+        factor = _VRMS_FACTOR.get(wvtp)  # ARB has neither AMPVRMS nor AMPDBM
+        if factor is not None:
+            vrms = channel.amp * factor
+            fields.append(("AMPVRMS", _g(vrms) + "Vrms"))
+            if channel.load is not None:  # AMPDBM only at a numeric load (RAMP: guess)
+                fields.append(("AMPDBM", _g(_snap(10 * math.log10(vrms**2 / channel.load / 0.001), 9)) + "dBm"))
+        fields.append(("OFST", _g(channel.ofst) + "V"))
+        fields.append(("HLEV", _g(_snap(channel.ofst + channel.amp / 2)) + "V"))
+        fields.append(("LLEV", _g(_snap(channel.ofst - channel.amp / 2)) + "V"))
+        if wvtp == "PULSE":  # no PHSE
+            fields.append(("DUTY", _g(100 * channel.width * channel.frq)))
+            fields.append(("WIDTH", _g(channel.width)))
+            fields.append(("RISE", _g(channel.rise) + "S"))
+            fields.append(("FALL", _g(channel.fall) + "S"))
+            fields.append(("DLY", _g(channel.dly)))
+        else:
+            fields.append(("PHSE", _g(channel.phse)))
+            if wvtp == "SQUARE":
+                fields.append(("DUTY", _g(channel.duty)))
+            elif wvtp == "RAMP":
+                fields.append(("SYM", _g(channel.sym)))
+    return fields
 
 
 def _pairs(tokens: list[str]) -> list[tuple[str, str | None]]:

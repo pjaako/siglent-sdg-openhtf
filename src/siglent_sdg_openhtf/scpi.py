@@ -11,10 +11,12 @@ from typing import NamedTuple
 
 from .models import ModelLimits
 
-Setup = Mapping[str, Mapping[str, Mapping[str, object]]]  # 'C1' -> 'BSWV'|'OUTP' -> key -> value
+Setup = Mapping[str, Mapping[str, Mapping[str, object]]]  # 'C1' -> 'BSWV'|'OUTP'|'MDWV'|... -> key -> value
 
 CHANNELS = ("C1", "C2")  # PG02 §3.3/§3.4 <channel>:={C1,C2}
-GROUPS = ("OUTP", "BSWV")  # PG02 §3.3 (OUTPut), §3.4 (BSWV)
+# PG02 §3.3 (OUTPut), §3.4 (BSWV), §3.5 (MDWV), §3.6.1 (SWWV), §3.7 (BTWV)
+GROUPS = ("OUTP", "BSWV", "MDWV", "SWWV", "BTWV")
+MOD_GROUPS = ("MDWV", "SWWV", "BTWV")  # at most one is on per channel (measured, modulation recon, README)
 
 # PG02 §3.4 WVTP; PRBS/IQ excluded: their parameters are "no" for SDG2000X in the §3.4 availability table
 WAVE_TYPES = frozenset({"SINE", "SQUARE", "RAMP", "PULSE", "NOISE", "ARB", "DC"})
@@ -30,6 +32,62 @@ BSWV_KEYS = frozenset(
         "WVTP", "FRQ", "PERI", "AMP", "AMPVRMS", "AMPDBM", "OFST", "SYM", "DUTY", "PHSE", "STDEV", "MEAN",
         "WIDTH", "RISE", "FALL", "DLY", "HLEV", "LLEV", "BANDSTATE", "BANDWIDTH", "MAX_OUTPUT_AMP",
     }
+)  # fmt: skip
+
+# PG02 §3.5 <type> (SDG2000X); TYPE is this project's name for the bare type token of the command and reply
+MDWV_TYPES = frozenset({"AM", "DSBAM", "FM", "PM", "PWM", "ASK", "FSK", "PSK"})
+# PG02 §3.5 parameters. The carrier is the BSWV group, so no CARR key exists in the data model.
+MDWV_KEYS = frozenset({"STATE", "TYPE", "SRC", "MDSP", "FRQ", "DEPTH", "DEVI", "KFRQ", "HFRQ", "PLRT"})
+# PG02 §3.6.1 parameters (everything the table lists, without MTRIG and CARR)
+SWWV_KEYS = frozenset(
+    {
+        "STATE", "TIME", "START", "STOP", "CENTER", "SPAN", "SWMD", "DIR", "SYM", "TRSR", "TRMD", "EDGE",
+        "MARK_STATE", "MARK_FREQ", "STARTTIME", "ENDTIME", "BACKTIME",
+    }
+)  # fmt: skip
+# PG02 §3.7 parameters (without MTRIG and CARR)
+BTWV_KEYS = frozenset(
+    {"STATE", "PRD", "STPS", "GATE_NCYC", "TRSR", "DLAY", "PLRT", "TRMD", "EDGE", "TIME", "COUNT"}
+)
+_MOD_KEYS: Mapping[str, frozenset[str]] = {"MDWV": MDWV_KEYS, "SWWV": SWWV_KEYS, "BTWV": BTWV_KEYS}
+_GROUP_SECTION = {"OUTP": "§3.3", "BSWV": "§3.4", "MDWV": "§3.5", "SWWV": "§3.6.1", "BTWV": "§3.7"}
+# Which modulation types a MDWV key belongs to (PG02 §3.5 parameter table; measured reply shapes, README)
+_MDWV_KEY_TYPES: Mapping[str, frozenset[str]] = {
+    "SRC": MDWV_TYPES,
+    "MDSP": frozenset({"AM", "DSBAM", "FM", "PM", "PWM"}),
+    "FRQ": frozenset({"AM", "DSBAM", "FM", "PM", "PWM"}),
+    "DEPTH": frozenset({"AM"}),
+    "DEVI": frozenset({"FM", "PM", "PWM"}),
+    "KFRQ": frozenset({"ASK", "FSK", "PSK"}),
+    "HFRQ": frozenset({"FSK"}),
+    "PLRT": frozenset({"PSK"}),
+}
+# Enumerations exactly as PG02 lists them
+_MOD_ENUMS: Mapping[tuple[str, str], frozenset[str]] = {
+    ("MDWV", "SRC"): frozenset({"INT", "EXT", "CH1", "CH2"}),  # PG02 §3.5
+    ("MDWV", "MDSP"): frozenset({"SINE", "SQUARE", "TRIANGLE", "UPRAMP", "DNRAMP", "NOISE", "ARB"}),  # PG02 §3.5
+    ("MDWV", "PLRT"): frozenset({"POS", "NEG"}),  # PG02 §3.5
+    ("SWWV", "SWMD"): frozenset({"LINE", "LOG", "STEP"}),  # PG02 §3.6.1
+    ("SWWV", "DIR"): frozenset({"UP", "DOWN", "UP_DOWN"}),  # PG02 §3.6.1
+    ("SWWV", "TRSR"): frozenset({"EXT", "INT", "MAN"}),  # PG02 §3.6.1
+    ("SWWV", "EDGE"): frozenset({"RISE", "FALL"}),  # PG02 §3.6.1
+    ("BTWV", "GATE_NCYC"): frozenset({"GATE", "NCYC"}),  # PG02 §3.7
+    ("BTWV", "TRSR"): frozenset({"EXT", "INT", "MAN"}),  # PG02 §3.7
+    ("BTWV", "PLRT"): frozenset({"NEG", "POS"}),  # PG02 §3.7
+    ("BTWV", "TRMD"): frozenset({"RISE", "FALL", "OFF"}),  # PG02 §3.7
+    ("BTWV", "EDGE"): frozenset({"RISE", "FALL"}),  # PG02 §3.7
+}
+_MOD_RANGES: Mapping[tuple[str, str], tuple[float, float]] = {
+    ("MDWV", "DEPTH"): (0.0, 120.0),  # PG02 §3.5, percent
+    ("SWWV", "SYM"): (0.0, 100.0),  # PG02 §3.6.1, percent
+    ("SWWV", "STARTTIME"): (0.0, 300.0),  # PG02 §3.6.1, seconds
+    ("SWWV", "ENDTIME"): (0.0, 300.0),  # PG02 §3.6.1
+    ("SWWV", "BACKTIME"): (0.0, 300.0),  # PG02 §3.6.1
+    ("BTWV", "STPS"): (0.0, 360.0),  # PG02 §3.7, degrees
+}
+_MOD_POSITIVE = frozenset(
+    {("MDWV", "FRQ"), ("MDWV", "KFRQ"), ("MDWV", "HFRQ"), ("SWWV", "TIME"), ("SWWV", "START"), ("SWWV", "STOP"),
+     ("BTWV", "PRD")}
 )  # fmt: skip
 
 _ALL_TYPES = WAVE_TYPES
@@ -160,6 +218,11 @@ def _is_on(value: object) -> bool:
     return _on_off(value) == "ON"
 
 
+def is_on(value: object) -> bool:
+    """True for ``True`` or an ON string (strip + upper), False for everything else."""
+    return _is_on(value)
+
+
 def build_outp(channel: int, key: str, value: object) -> str:
     """``C1:OUTP ON``, ``C1:OUTP LOAD,50``, ``C1:OUTP LOAD,HZ``, ``C1:OUTP PLRT,NOR`` (PG02 §3.3 examples)."""
     ch = channel_name(channel)
@@ -173,12 +236,40 @@ def build_outp(channel: int, key: str, value: object) -> str:
     raise ValueError(f"unknown OUTP key {key!r}")
 
 
-def build_command(channel: int, group: str, key: str, value: object) -> str:
-    """The write command for one ``(group, key, value)`` triple: ``build_outp`` or ``build_bswv`` (PG02 §3.3, §3.4)."""
+def build_mdwv(channel: int, mdwv_type: str, key: str, value: object) -> str:
+    """``C1:MDWV STATE,ON``, ``C1:MDWV AM`` (key ``TYPE``), ``C1:MDWV AM,DEPTH,40`` (PG02 §3.5 examples).
+
+    Every parameter other than ``STATE`` and ``TYPE`` is written with its type in front.
+    """
+    ch = channel_name(channel)
+    if key == "STATE":
+        return f"{ch}:MDWV STATE,{'ON' if _is_on(value) else 'OFF'}"  # PG02 §3.5
+    if key == "TYPE":
+        return f"{ch}:MDWV {format_value(value)}"  # PG02 §3.5
+    return f"{ch}:MDWV {mdwv_type},{key},{format_value(value)}"  # PG02 §3.5
+
+
+def _build_swwv_btwv(channel: int, group: str, key: str, value: object) -> str:
+    """``C1:SWWV TIME,2``, ``C1:BTWV TIME,INF`` (PG02 §3.6.1, §3.7 examples); ``STATE`` is written ON/OFF."""
+    text = ("ON" if _is_on(value) else "OFF") if key == "STATE" else format_value(value)
+    return f"{channel_name(channel)}:{group} {key},{text}"  # PG02 §3.6.1, §3.7
+
+
+def build_command(channel: int, group: str, key: str, value: object, *, mdwv_type: str | None = None) -> str:
+    """The write command for one ``(group, key, value)`` triple (PG02 §3.3 to §3.7).
+
+    ``mdwv_type`` is the modulation type the parameters of an ``MDWV`` command are written with.
+    """
     if group == "OUTP":
         return build_outp(channel, key, value)
     if group == "BSWV":
         return build_bswv(channel, key, value)
+    if group == "MDWV":
+        if mdwv_type is None and key not in ("STATE", "TYPE"):
+            raise ValueError(f"MDWV {key}: the modulation type is needed to build the command")
+        return build_mdwv(channel, mdwv_type or "", key, value)
+    if group in ("SWWV", "BTWV"):
+        return _build_swwv_btwv(channel, group, key, value)
     raise ValueError(f"unknown group {group!r}; expected one of {list(GROUPS)}")
 
 
@@ -206,6 +297,41 @@ def parse_reply(raw: str, expect_header: str, leading_key: str | None = None) ->
             raise ProtocolError(f"empty or duplicate key {key!r} in reply: {raw!r}")
         fields[key] = val
     return Reply(header=header, fields=fields, raw=text)
+
+
+def parse_mod_reply(raw: str, expect_header: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Parse ``<ch>:MDWV|SWWV|BTWV`` replies into ``(own fields, carrier fields)`` (PG02 §3.5, §3.6.1, §3.7).
+
+    The reply is ``STATE,ON,<own fields>,CARR,<carrier fields>``; it is split at the bare ``CARR`` token. The
+    bare type token of ``MDWV`` is stored under ``TYPE``. ``STATE,OFF`` gives ``({"STATE": "OFF"}, {})``.
+    """
+    text = raw.strip()
+    header, _, body = text.partition(" ")
+    if header != expect_header:
+        raise ProtocolError(f"expected reply header {expect_header!r}, got {header!r}: {raw!r}")
+    tokens = [t.strip() for t in body.split(",")] if body.strip() else []
+    if "CARR" in tokens:
+        split = tokens.index("CARR")
+        own_tokens, carrier_tokens = tokens[:split], tokens[split + 1 :]
+    else:
+        own_tokens, carrier_tokens = tokens, []
+    fields: dict[str, str] = {}
+    if len(own_tokens) >= 2 and own_tokens[0] == "STATE":
+        fields["STATE"] = own_tokens[1]
+        own_tokens = own_tokens[2:]
+    if expect_header.endswith(":MDWV") and len(own_tokens) % 2:
+        fields["TYPE"] = own_tokens.pop(0)  # the bare type token
+    return (_pairs_to_dict(own_tokens, raw, fields), _pairs_to_dict(carrier_tokens, raw, {}))
+
+
+def _pairs_to_dict(tokens: list[str], raw: str, fields: dict[str, str]) -> dict[str, str]:
+    if len(tokens) % 2:
+        raise ProtocolError(f"odd number of key/value tokens in reply: {raw!r}")
+    for key, val in zip(tokens[0::2], tokens[1::2], strict=True):
+        if not key or key in fields:
+            raise ProtocolError(f"empty or duplicate key {key!r} in reply: {raw!r}")
+        fields[key] = val
+    return fields
 
 
 _NUMBER_WITH_UNIT = re.compile(r"^([-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?)\s*([A-Za-z%/]*)$")
@@ -298,12 +424,12 @@ def validate_setup(setup: Setup, limits: ModelLimits | None) -> None:
                 raise ValueError(f"{channel}: unknown group {group!r}; expected one of {list(GROUPS)}")
             if not isinstance(params, Mapping):
                 raise ValueError(f"{_where(channel, group)}: expected a mapping of keys, got {type(params).__name__}")
-            allowed = OUTP_KEYS if group == "OUTP" else BSWV_KEYS
+            allowed = {"OUTP": OUTP_KEYS, "BSWV": BSWV_KEYS, **_MOD_KEYS}[group]
             for key in params:
                 if key not in allowed:
                     raise ValueError(
                         f"{_where(channel, group, key)}: not a {group} parameter of the SDG2000X "
-                        f"(PG02 {'§3.3' if group == 'OUTP' else '§3.4'}); allowed: {sorted(allowed)}"
+                        f"(PG02 {_GROUP_SECTION[group]}); allowed: {sorted(allowed)}"
                     )
         outp = groups.get("OUTP", {})
         bswv = groups.get("BSWV", {})
@@ -312,8 +438,108 @@ def validate_setup(setup: Setup, limits: ModelLimits | None) -> None:
         for key, value in bswv.items():
             _check_bswv_value(_where(channel, "BSWV", key), key, value)
         _validate_bswv_combination(channel, bswv)
+        for group in MOD_GROUPS:
+            for key, value in groups.get(group, {}).items():
+                _check_mod_value(_where(channel, group, key), group, key, value)
+        _validate_mod_combination(channel, groups)
         if limits is not None:
             _validate_limits(channel, outp, bswv, limits)
+
+
+def _check_mod_value(where: str, group: str, key: str, value: object) -> None:
+    """Value type, enumeration and range of one MDWV, SWWV or BTWV key (PG02 §3.5, §3.6.1, §3.7)."""
+    if key in ("STATE", "MARK_STATE") or (group == "SWWV" and key == "TRMD"):
+        if _on_off(value) is None:
+            raise ValueError(f"{where}: must be a bool or 'ON'/'OFF', got {value!r}")
+    elif group == "MDWV" and key == "TYPE":
+        if not (isinstance(value, str) and value in MDWV_TYPES):
+            raise ValueError(f"{where}: {value!r} is not one of {sorted(MDWV_TYPES)}")  # PG02 §3.5
+    elif (group, key) in _MOD_ENUMS:
+        options = _MOD_ENUMS[(group, key)]
+        if not (isinstance(value, str) and value in options):
+            raise ValueError(f"{where}: {value!r} is not one of {sorted(options)}")
+    elif group == "BTWV" and key == "TIME":
+        # PG02 §3.7: INF or a positive cycle count
+        if not (value == "INF" or (isinstance(value, int) and not isinstance(value, bool) and value > 0)):
+            raise ValueError(f"{where}: must be a positive int or 'INF', got {value!r}")
+    else:
+        num = _number(value)
+        if num is None or not math.isfinite(num):
+            raise ValueError(f"{where}: must be a finite number, got {value!r}")
+        if (group, key) in _MOD_POSITIVE and num <= 0:
+            raise ValueError(f"{where}: must be greater than 0, got {num:g}")
+        if (group, key) in _MOD_RANGES:
+            low, high = _MOD_RANGES[(group, key)]
+            if not low <= num <= high:
+                raise ValueError(f"{where}: {num:g} outside {low:g}..{high:g} (PG02 {_GROUP_SECTION[group]})")
+
+
+def _validate_mod_combination(channel: str, groups: Mapping[str, Mapping[str, object]]) -> None:
+    """Rules across keys: STATE on needed, key fits the type, exclusivity, carrier and frequency coupling."""
+    bswv = groups.get("BSWV", {})
+    wvtp = bswv.get("WVTP")
+    on_groups: list[str] = []
+    for group in MOD_GROUPS:
+        params = groups.get(group)
+        if not params:
+            continue
+        state_on = "STATE" in params and _is_on(params["STATE"])
+        others = [k for k in params if k != "STATE"]
+        if others and not state_on:
+            # measured, modulation recon (README): while STATE is OFF every other parameter is ignored
+            raise ValueError(
+                f"{_where(channel, group, others[0])}: needs STATE on in the same group "
+                "(parameters written while STATE is OFF are ignored by the generator)"
+            )
+        if state_on:
+            on_groups.append(group)
+    if len(on_groups) > 1:
+        raise ValueError(
+            f"{channel}: {' and '.join(on_groups)} cannot be on together (switching one on switches the others off)"
+        )
+    mdwv = groups.get("MDWV")
+    if mdwv and "STATE" in mdwv and _is_on(mdwv["STATE"]):
+        mtype = mdwv.get("TYPE")
+        if mtype is None:
+            raise ValueError(f"{_where(channel, 'MDWV', 'TYPE')}: required when STATE is on")
+        for key in mdwv:
+            if key in _MDWV_KEY_TYPES and mtype not in _MDWV_KEY_TYPES[key]:
+                raise ValueError(
+                    f"{_where(channel, 'MDWV', key)}: not a parameter of {mtype} (valid for "
+                    f"{sorted(_MDWV_KEY_TYPES[key])}; PG02 §3.5)"
+                )
+        if mtype == "PM" and "DEVI" in mdwv:
+            devi = _number(mdwv["DEVI"])
+            if devi is not None and not 0.0 <= devi <= 360.0:
+                raise ValueError(f"{_where(channel, 'MDWV', 'DEVI')}: {devi:g} outside 0..360 for PM (PG02 §3.5)")
+        if isinstance(wvtp, str):
+            if wvtp in ("NOISE", "DC"):
+                raise ValueError(f"{_where(channel, 'MDWV')}: modulation is not available with a {wvtp} carrier")
+            if mtype == "PWM" and wvtp != "PULSE":
+                raise ValueError(f"{_where(channel, 'MDWV', 'TYPE')}: PWM needs a PULSE carrier, BSWV WVTP is {wvtp}")
+            if wvtp == "PULSE" and mtype != "PWM":
+                raise ValueError(f"{_where(channel, 'MDWV', 'TYPE')}: a PULSE carrier allows only PWM, not {mtype}")
+    swwv = groups.get("SWWV")
+    if swwv and "STATE" in swwv and _is_on(swwv["STATE"]):
+        if isinstance(wvtp, str) and wvtp in ("PULSE", "NOISE", "DC"):
+            raise ValueError(f"{_where(channel, 'SWWV')}: a sweep is not available with a {wvtp} carrier")
+        for key in ("FRQ", "PERI"):
+            if key in bswv:
+                raise ValueError(
+                    f"{_where(channel, 'BSWV', key)}: cannot be combined with a sweep, "
+                    "which owns the carrier frequency (set START and STOP)"
+                )
+        start, stop = _number(swwv.get("START")), _number(swwv.get("STOP"))
+        if start is not None and stop is not None and start > stop:
+            raise ValueError(f"{_where(channel, 'SWWV', 'START')}: {start:g} is above STOP {stop:g}")
+    btwv = groups.get("BTWV")
+    if btwv and "STPS" in btwv and "PHSE" in bswv:
+        stps, phse = _number(btwv["STPS"]), _number(bswv["PHSE"])
+        if stps is not None and phse is not None and stps != phse:
+            raise ValueError(
+                f"{_where(channel, 'BTWV', 'STPS')}: {stps:g} differs from BSWV PHSE {phse:g}; "
+                "the burst start phase is the carrier phase"
+            )
 
 
 def _validate_bswv_combination(channel: str, bswv: Mapping[str, object]) -> None:
@@ -401,6 +627,21 @@ def _validate_limits(
         )
 
 
+def _order_mod_group(group: str, params: Mapping[str, object]) -> list[tuple[str, str, object]]:
+    """One MDWV, SWWV or BTWV group: ``STATE`` on first, then its leading keys, then the rest as given."""
+    state = params.get("STATE")
+    if "STATE" in params and not _is_on(state):
+        return [(group, "STATE", state)]  # a STATE off is the only command of the group
+    leading = {"MDWV": ("TYPE", "SRC"), "SWWV": ("START", "STOP"), "BTWV": ("GATE_NCYC", "TRSR")}[group]
+    triples: list[tuple[str, str, object]] = [(group, "STATE", state)] if "STATE" in params else []
+    triples.extend((group, k, params[k]) for k in leading if k in params)
+    if group == "SWWV" and all(k in params for k in leading):
+        # START is clamped by the old STOP and the other way round, so START again after STOP (README)
+        triples.append((group, "START", params["START"]))
+    triples.extend((group, k, v) for k, v in params.items() if k != "STATE" and k not in leading)
+    return triples
+
+
 def order_setup(channel_setup: Mapping[str, Mapping[str, object]]) -> list[tuple[str, str, object]]:
     """``(group, key, value)`` triples in a safe write order for one channel.
 
@@ -424,5 +665,10 @@ def order_setup(channel_setup: Mapping[str, Mapping[str, object]]) -> list[tuple
         if key in bswv:
             triples.append(("BSWV", key, bswv[key]))
     triples.extend(("BSWV", k, v) for k, v in bswv.items() if k not in bswv_order)
+    # Groups that are switched off go first: STATE,OFF of any of the three commands switches the active
+    # mode off, whichever it is (measured, modulation recon, README).
+    present = [group for group in MOD_GROUPS if group in channel_setup]
+    for group in sorted(present, key=lambda g: is_on(channel_setup[g].get("STATE"))):
+        triples.extend(_order_mod_group(group, channel_setup[group]))
     triples.extend(last)
     return triples

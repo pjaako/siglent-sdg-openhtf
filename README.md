@@ -28,6 +28,21 @@ Keys are the SCPI mnemonics of the official programming guide (`docs/`), so ever
 `FRQ`/`PERI`, `AMP`/`AMPVRMS`/`AMPDBM` + `OFST` or `HLEV` + `LLEV`, `PHSE`, `DUTY`, `SYM`, `WIDTH`, `RISE`,
 `FALL`, `DLY`, `STDEV`, `MEAN`, `BANDSTATE`, `BANDWIDTH`, `MAX_OUTPUT_AMP`. `AMPDBM` needs a numeric `LOAD`
 (it is ignored at `HZ`). `MAX_OUTPUT_AMP` has no visible effect on this firmware.
+`MDWV` (§3.5): `STATE`, `TYPE` (`AM`, `DSBAM`, `FM`, `PM`, `PWM`, `ASK`, `FSK`, `PSK`), `SRC`, `MDSP`, `FRQ`,
+`DEPTH`, `DEVI`, `KFRQ`, `HFRQ`, `PLRT`; the keys must fit the type. `SWWV` (§3.6.1): `STATE`, `TIME`, `START`,
+`STOP`, `SWMD`, `DIR`, `TRSR`, `TRMD`, `EDGE`, `CENTER`, `SPAN`, `SYM`, `MARK_STATE`, `MARK_FREQ`, `STARTTIME`,
+`ENDTIME`, `BACKTIME`. `BTWV` (§3.7): `STATE`, `GATE_NCYC`, `TRSR`, `TRMD`, `PRD`, `STPS`, `DLAY`, `PLRT`, `TIME`
+(an int or `INF`), `EDGE`, `COUNT`. The carrier of all three is the `BSWV` group; the plug never sends `CARR`.
+Only one of the three can be on per channel, and a group with keys needs `STATE` on.
+`manual_trigger(channel, 'SWWV' | 'BTWV')` sends `MTRIG`.
+
+```python
+SETUP_AM = {'C1': {'BSWV': {'WVTP': 'SINE', 'FRQ': 10000.0, 'AMP': 2.0},
+                   'MDWV': {'STATE': True, 'TYPE': 'AM', 'MDSP': 'SINE', 'FRQ': 100.0, 'DEPTH': 80},
+                   'OUTP': {'LOAD': 50, 'STATE': True}}}
+generator.apply_setup(SETUP_AM)           # carrier first, then the modulation, the output last
+generator.get_modulation(1)               # {'STATE': 'ON', 'TYPE': 'AM', 'FRQ': 100.0, 'DEPTH': 80.0, ...}
+```
 
 The plug has no setter per setting. `tearDown()` turns both outputs off and closes the connection; it does
 not restore anything else.
@@ -97,6 +112,19 @@ replays it in `tests/test_hardware_session_1.py`.
 - A value is echoed as written when it has at most 6 significant digits and is in range. `AMP,1.23456789`
   reads `1.23457V`.
 
+- Reply of `MDWV?`, `SWWV?` and `BTWV?`: `<ch>:<CMD> STATE,ON,<own fields>,CARR,<carrier fields>`. The carrier
+  fields are the `BSWV?` fields without `PERI`, `HLEV`, `LLEV`, `WIDTH` and the NOISE band fields (`AMPDBM` stays at a numeric `LOAD`).
+  With `STATE` off the reply is only `STATE,OFF`.
+- `MDWV?` has the type as a bare token: `STATE,ON,AM,MDSP,SINE,SRC,INT,FRQ,100HZ,DEPTH,100,CARR,...`. Own fields:
+  AM `MDSP,SRC,FRQ,DEPTH`; DSBAM `MDSP,SRC,FRQ`; FM `MDSP,SRC,FRQ,DEVI` (`DEVI,100HZ`); PM the same (`DEVI,100`);
+  PWM the same (`DEVI,0.00019S`); ASK `SRC,KFRQ`; FSK `SRC,KFRQ,HFRQ`; PSK `SRC,KFRQ,PLRT`. `FRQ`, `KFRQ`, `HFRQ`
+  print like the carrier frequency (10 digits, `HZ`), the rest with 6 digits.
+- `SWWV?`: `STATE,ON,TIME,1S,STOP,1500HZ,START,500HZ,TRSR,INT,TRMD,OFF,SWMD,LINE,DIR,UP,CARR,...`. With
+  `TRSR,EXT` there is no `TRMD` and `EDGE,RISE` follows `DIR`.
+- `BTWV?`, NCYC: `STATE,ON,PRD,0.01S,STPS,0,TRSR,INT,TRMD,OFF,TIME,1,DLAY,6.04035e-07S,GATE_NCYC,NCYC,CARR,...`.
+  `PRD` only with `TRSR,INT`, `TRMD` (`OFF`, `RISE`, `FALL`) not with `EXT`. GATE: `PRD,STPS,TRSR,GATE_NCYC,PLRT` (default `PLRT,NEG`).
+  A PULSE carrier has no `STPS`. A NOISE carrier: `STATE,ON,PLRT,POS,CARR,WVTP,NOISE,STDEV,..,MEAN,..`.
+
 ## Things the manual does not tell you
 
 - `SYST:ERR?` (not in PG02) answered `+0, No error` and `*CLS` was accepted, also right after clamped writes.
@@ -140,6 +168,36 @@ replays it in `tests/test_hardware_session_1.py`.
 - `PLRT,INVT` inverts the offset as well as the waveform (measured with a scope: +0.5 V set, -0.5 V out).
 - PyVISA gives the whole process one ResourceManager per backend. The plug never closes it: closing it
   closes the sessions of every other instrument plug in the same test.
+- Modulation, sweep, burst (recon 2026-10-05, outputs off). While `STATE` is `OFF` the query answers only
+  `STATE,OFF` and every other parameter written is ignored (`MDWV`, `BTWV`; the sweep applies them); values set earlier survive `STATE,OFF`/`ON`. `*RST`
+  switches all three off. Switching one on switches the other two off.
+- `C1:MDWV AM` selects the type; a parameter written with a type selects it too. Each type keeps its own values.
+  `SRC,INT` and `SRC,EXT` work, `CH1` and `CH2` are ignored. A value written under `SRC,EXT` is kept.
+- PWM exists only with a PULSE carrier, and a PULSE carrier reads as PWM (back to SINE: the earlier type again).
+  A NOISE or DC carrier switches all three off and refuses `STATE,ON`. A `WVTP` written through `BSWV` switches
+  all three off whatever the type; `CARR,WVTP` keeps them on. `CARR,<key>,<value>` through any of the
+  three commands writes the carrier even while `STATE` is `OFF`.
+- Sweep: the carrier frequency is `(START+STOP)/2`; a carrier `FRQ` write keeps the sweep centred with
+  `half = min(old span/2, FRQ - 1e-06)`. `START`
+  above `STOP` becomes `STOP` and the other way round, so the plug writes `START`, `STOP`, `START`. `STOP` up to the
+  carrier maximum, `START` down to 1e-06, `TIME` 0.001..500. `SWMD,STEP`, `DIR,UP_DOWN`, `EDGE,FALL` are ignored.
+  `CENTER`, `SPAN`, `SYM`, `MARK_*`, `STARTTIME`, `ENDTIME`, `BACKTIME` are accepted and never echoed; `MTRIG` too.
+  `TRMD` while `TRSR` is `EXT` switches `TRSR` to `INT`; `TRSR,EXT` resets `TRMD` to `OFF` (sweep and burst). A PULSE carrier switches the sweep off.
+- Burst: `TIME,INF` switches `TRSR` to `EXT`; `TIME` is 1..1000000. `STPS` is the carrier `PHSE` (400 reads 40).
+  `DLAY` above 100 becomes 100. `PRD` written under `EXT` or `MAN` is ignored; its minimum depends on the carrier.
+  In GATE mode `DLAY` and `TIME` writes are ignored. `TRMD,RISE`/`FALL` show under `INT` and `MAN`; `EDGE`, `COUNT` never show.
+  `TRSR,INT` is refused while `TIME` is `INF`.
+- FM: `FRQ` is limited to the carrier frequency and `DEVI` follows a falling carrier. FSK `HFRQ,0` reads `0.001HZ`.
+- FM `FRQ` and `DEVI` both follow a falling carrier. The sweep centring also respects the carrier maximum
+  (`BSWV FRQ,45E6`: carrier 40 MHz, `START` = `STOP`), and a carrier type change that clamps the carrier
+  frequency moves the sweep the same way. `GATE_NCYC,GATE` while `TRSR` is `MAN` switches `TRSR` to `INT`; in
+  GATE mode `TRMD` writes are ignored too. Not modelled: after `BSWV WVTP` switched modulation off, `STATE,ON`
+  once showed FM instead of the last selected PSK; PWM `DEVI,5` read `0.000199985S` (a limit near the pulse
+  width); the burst `DLAY` default at 25 MHz is 6.76e-07.
+- A NOISE carrier through `CARR` leaves the burst in GATE mode for good. Not modelled: the default and minimum
+  burst `DLAY` depends on the carrier frequency; a sweep `START` of 1e-06 reads `1.00001e-06HZ` after off and on.
+- `STATE,OFF` of `MDWV`, `SWWV` or `BTWV` switches the active mode off, whichever of the three it is. The
+  plug writes the groups that are switched off before the one that is switched on.
 - Still open: USB via pyvisa-py (reports from other projects say it is unreliable); the other two models.
 
 ## Files

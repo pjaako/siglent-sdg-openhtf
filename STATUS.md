@@ -25,7 +25,11 @@ local session, branch `hardware-session-1`. Measured facts: `SPEC-hardware-1.md`
 **Station demo (T7) is done:** `examples/station_demo.py` drives the generator and a Rigol DHO814 in one
 OpenHTF test and passes on the instruments; `--fake` runs it without hardware. The scope plug comes from the
 package `rigol-dho-openhtf` (extra `station`, pinned in `[tool.uv.sources]`). Next: task V1 when a 50 ohm
-terminator is at hand, then the `later` specs.
+terminator is at hand, V2, then the `later` specs.
+
+**Modulation, sweep and burst (T8) are in:** three more groups in the setup data, verified by read-back on
+the generator with outputs off. Facts and three verbatim transcripts: `SPEC-modulation.md`,
+`tests/data/hardware_modulation_*.txt`.
 
 ## Task board
 
@@ -42,7 +46,9 @@ terminator is at hand, then the `later` specs.
 | T6 | `SPEC-hardware-1.md`: hardware findings into the fake, validator, tolerances, README | done, accepted on hardware |
 | T7 | `SPEC-station.md` → `examples/station_demo.py` with rigol-dho-openhtf | done, accepted on both instruments 2026-10-05 |
 | V1 | Hardware check: signal levels with `LOAD,50` and a real 50 ohm load at the output (a feed-through terminator at the scope input). Expect the scope to read what `BSWV?` shows. The agent must ask the human to fit the terminator first, and to remove it afterwards. | open, needs the human |
-| later | SPEC-arb, SPEC-modulation, SPEC-counter-sync | each needs a hardware session |
+| T8 | `SPEC-modulation.md`: `MDWV`, `SWWV`, `BTWV` as setup groups, fake, tests | done; read-back accepted on the generator 2026-10-05, signal not measured |
+| V2 | Hardware check: modulation, sweep and burst at the output with the scope (AM depth, sweep range, burst cycle count) | open |
+| later | SPEC-arb, SPEC-counter-sync | each needs a hardware session |
 
 ## Hardware access
 
