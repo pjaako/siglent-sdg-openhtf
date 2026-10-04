@@ -614,7 +614,7 @@ def test_usb_discovery_finds_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(RuntimeError, match="F4EC"):
         SiglentSdgPlug()
     assert rm.opened == []
-    assert rm.closed  # the ResourceManager opened for the search is not leaked
+    assert not rm.closed  # the ResourceManager is shared by the process and stays open
 
 
 @CONF.save_and_restore
@@ -641,7 +641,7 @@ def test_full_resource_names_pass_through(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @CONF.save_and_restore
-def test_opened_resource_is_configured_and_everything_closed_by_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_opened_resource_is_configured_and_closed_by_teardown_but_the_shared_manager_stays_open(monkeypatch: pytest.MonkeyPatch) -> None:
     CONF.load(siglent_sdg_resource="192.0.2.10", siglent_sdg_timeout_ms=7000)
     rm = _StubRM([])
     _install_rm(monkeypatch, rm)
@@ -651,7 +651,8 @@ def test_opened_resource_is_configured_and_everything_closed_by_teardown(monkeyp
     assert not fake.closed and not rm.closed
     plug.tearDown()
     assert fake.log[-2:] == ["C1:OUTP OFF", "C2:OUTP OFF"]
-    assert fake.closed and rm.closed
+    # PyVISA shares one ResourceManager per backend: closing it would close other plugs' sessions
+    assert fake.closed and not rm.closed
     plug.tearDown()  # idempotent
 
 
@@ -666,13 +667,13 @@ def test_injected_resource_does_not_touch_pyvisa(monkeypatch: pytest.MonkeyPatch
 
 
 @CONF.save_and_restore
-def test_failed_construction_closes_resource_and_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_construction_closes_resource_but_not_the_shared_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     CONF.load(siglent_sdg_resource="192.0.2.10")
     rm = _StubRM([], instrument=FakeSdgResource(raise_on=["*IDN?"]))
     _install_rm(monkeypatch, rm)
     with pytest.raises(RuntimeError, match="simulated"):
         SiglentSdgPlug()
-    assert rm.instrument.closed and rm.closed
+    assert rm.instrument.closed and not rm.closed
 
 
 # -- OpenHTF ----------------------------------------------------------------------------------------------

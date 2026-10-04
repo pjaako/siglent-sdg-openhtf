@@ -46,6 +46,24 @@ used as is; an empty name means the first USB instrument with vendor id `0xF4EC`
 verified. The raw socket `TCPIP0::<ip>::5025::SOCKET` is the alternative in PG02 §1.2.4; this unit refused
 the connection on port 5025. Config key: `siglent_sdg_resource`.
 
+## Station demo
+
+`examples/station_demo.py` drives this plug and the scope plug of `rigol-dho-openhtf` (optional extra
+`station`, installed by `uv sync --all-extras --dev`) in one OpenHTF test. The generator feeds a signal into a
+Rigol DHO814, the scope measures Vpp and frequency, and the readings are recorded with limits (+-5 % on Vpp,
++-1 % on frequency). The steps are data (`STEPS` at the top of the file).
+
+```bash
+uv run python examples/station_demo.py --fake                   # fake generator and fake scope
+uv run python examples/station_demo.py --generator 192.0.2.10 [--scope NAME]   # real instruments
+```
+
+Assumed wiring: generator CH1 to scope CH1, 1:1 BNC cable, no terminator; the scope input is 1 Mohm, so the
+generator sees an open circuit and the steps use `LOAD,HZ`. Input guard: a step whose open-circuit peak
+`(|OFST| + AMP/2) / k` exceeds 5 V, or that has no `AMP`, is refused with `ValueError` before anything is sent.
+The scope's own settings are saved when its plug is created and restored at the end (expect a
+`set_state: setup block not loaded` warning in the log: the scope drops the first block after a measurement).
+
 ## Facts (measured on the generator)
 
 SDG2042X, firmware 2.01.01.23R7, VXI-11. The verbatim session is `tests/data/hardware_session_1.txt`; the fake
@@ -119,6 +137,9 @@ replays it in `tests/test_hardware_session_1.py`.
 - Small things the fake does not model: `PERI` is computed in single precision (20001220 Hz reads
   `4.99969e-08S`); a PULSE duty at the width limit read `99.992` where the formula gives 99.9919.
 - `MAX_OUTPUT_AMP,5` was accepted, is not echoed and had no visible effect: `AMP,10` was still accepted.
+- `PLRT,INVT` inverts the offset as well as the waveform (measured with a scope: +0.5 V set, -0.5 V out).
+- PyVISA gives the whole process one ResourceManager per backend. The plug never closes it: closing it
+  closes the sessions of every other instrument plug in the same test.
 - Still open: USB via pyvisa-py (reports from other projects say it is unreliable); the other two models.
 
 ## Files
@@ -127,6 +148,7 @@ replays it in `tests/test_hardware_session_1.py`.
 src/siglent_sdg_openhtf/   plug.py (SiglentSdgPlug), scpi.py (pure helpers), models.py (limits), fake_resource.py
 tests/                     pytest suite, no hardware
 example_test.py            minimal OpenHTF test, --fake
+examples/station_demo.py   generator + scope station test, --fake
 tools/probe.py             hardware probe run by the owner; results go to README
 docs/                      official Siglent programming guides (PDF) and the text extraction used by agents
 AGENTS.md SPEC*.md STATUS.md   behaviour protocol, contracts, handoff state
