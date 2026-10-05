@@ -6,17 +6,18 @@ into the DHO814, the scope measures Vpp and frequency, and both are recorded wit
 both fakes (`--fake`).
 
 Owner decision 2026-10-05: `rigol-dho-openhtf` is a proper package and an optional dependency here.
-Done: extra `station` in `pyproject.toml`, pinned to commit `d6cb29d` of its `main` through
+Done: extra `station` in `pyproject.toml`, pinned to commit `829ff0d` of its `main` through
 `[tool.uv.sources]`; `uv sync --all-extras --dev` installs it. The rest of this spec is still to be written.
 
-## The scope package (as of `d6cb29d`)
+## The scope package (as of `829ff0d`)
 
 - `from rigol_dho_openhtf import RigolDhoPlug, Waveform`;
   `from rigol_dho_openhtf.fake_resource import FakeDhoResource`.
 - Fake scope plug for `--fake`: `RigolDhoPlug(resource=FakeDhoResource(signal='clock'))`. The default
   sawtooth of the fake touches both ends of the code range and looks clipped; `clock` is a bounded square.
 - Config keys `rigol_dho_resource`, `rigol_dho_restore_state`; set them after importing the package.
-- `get_state()` returns `block` (bytes), `recording` (bool), `wav` (dict of five strings). Save all three.
+- `get_state()` returns `block` (bytes), `recording` (bool), `wav` (dict of five strings) and `check` (dict
+  of eight settings that `set_state()` reads back). Save all four.
 - `measure()` returns `9.9E+37` on the first query of an item.
 - Its `tearDown()` no longer closes the shared ResourceManager.
 
@@ -85,13 +86,15 @@ so that this project does not depend on reading it.
 - SINE 1 kHz 2 Vpp read 2.036 Vpp, 999.2 Hz at 500 mV/div.
 - A scope measurement read right after `OUTP OFF` still showed the old value (2.02 Vpp): wait before
   reading.
-- **`set_state()` after a `:MEAS:ITEM?` query does nothing, and reports nothing.** Scope alone, one
-  session: `reset()`, `apply_setup()`, `set_state(saved)` restores the settings. With one `measure('VPP', 1)`
-  before `set_state()` the timebase and the scale stay as set by the test, `:SYST:ERR?` is empty, and
-  `set_state()` raises nothing. A 2 s pause does not help. A second `set_state()` works, and so does a
-  restore from a fresh session. 5 runs, the generator plug present or not makes no difference. So a station
-  test that measures and then relies on the scope plug's restore leaves the scope changed. Until the scope
-  plug handles it: restore, read a setting back, restore again if it did not take.
+- The scope drops a setup block when a `:MEAS:ITEM?` query was followed by any other query before the
+  block; nothing is loaded and no error is queued (found here, cause measured by the scope project). Since
+  `829ff0d` the scope plug's `set_state()` reads eight settings back (timebase scale and offset; display,
+  scale and offset of channels 1 and 2), loads the block again up to three times and raises if they still
+  differ. Checked here with both plugs, 3 runs: measure, then the scope plug's own `tearDown()`; the
+  settings were back each time, each time after one extra load, logged as
+  `set_state: setup block not loaded (attempt 1): [...]`. Expect that warning in a station log.
+- The limit of that check: it sees a dropped block only if the test changed one of the eight settings. The
+  station demo must change the timebase or the scale of channel 1 (it will), not only the trigger level.
 
 The scope is a shared instrument with the user's own setup on it: a station test saves its state first,
 restores it at the end and reports whether the restore worked.

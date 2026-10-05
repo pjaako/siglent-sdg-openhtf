@@ -830,7 +830,7 @@ wheels = [
 [[package]]
 name = "rigol-dho-openhtf"
 version = "0.1.0"
-source = { git = "https://github.com/pjaako/rigol-dho-openhtf?rev=d6cb29ded8f2ac5db1ccfb418eb12da19a82b003#d6cb29ded8f2ac5db1ccfb418eb12da19a82b003" }
+source = { git = "https://github.com/pjaako/rigol-dho-openhtf?rev=829ff0d#829ff0db38fb62ea61c6ee643f84d28a73a9d897" }
 dependencies = [
     { name = "numpy" },
     { name = "openhtf" },
@@ -870,7 +870,7 @@ requires-dist = [
     { name = "pyusb", marker = "extra == 'usb'" },
     { name = "pyvisa", specifier = ">=1.14" },
     { name = "pyvisa-py", specifier = ">=0.7" },
-    { name = "rigol-dho-openhtf", marker = "extra == 'station'", git = "https://github.com/pjaako/rigol-dho-openhtf?rev=d6cb29ded8f2ac5db1ccfb418eb12da19a82b003" },
+    { name = "rigol-dho-openhtf", marker = "extra == 'station'", git = "https://github.com/pjaako/rigol-dho-openhtf?rev=829ff0d" },
 ]
 provides-extras = ["usb", "station"]
 
