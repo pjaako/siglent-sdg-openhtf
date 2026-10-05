@@ -5,8 +5,20 @@ of `rigol-dho-openhtf` (https://github.com/pjaako/rigol-dho-openhtf) together: t
 into the DHO814, the scope measures Vpp and frequency, and both are recorded with limits. Must run with
 both fakes (`--fake`).
 
-Owner decision 2026-10-05: `rigol-dho-openhtf` becomes a proper package (`rigol_dho_openhtf`, no
-compatibility shims) and then an optional dependency here. This spec is written after that.
+Owner decision 2026-10-05: `rigol-dho-openhtf` is a proper package and an optional dependency here.
+Done: extra `station` in `pyproject.toml`, pinned to commit `d6cb29d` of its `main` through
+`[tool.uv.sources]`; `uv sync --all-extras --dev` installs it. The rest of this spec is still to be written.
+
+## The scope package (as of `d6cb29d`)
+
+- `from rigol_dho_openhtf import RigolDhoPlug, Waveform`;
+  `from rigol_dho_openhtf.fake_resource import FakeDhoResource`.
+- Fake scope plug for `--fake`: `RigolDhoPlug(resource=FakeDhoResource(signal='clock'))`. The default
+  sawtooth of the fake touches both ends of the code range and looks clipped; `clock` is a bounded square.
+- Config keys `rigol_dho_resource`, `rigol_dho_restore_state`; set them after importing the package.
+- `get_state()` returns `block` (bytes), `recording` (bool), `wav` (dict of five strings). Save all three.
+- `measure()` returns `9.9E+37` on the first query of an item.
+- Its `tearDown()` no longer closes the shared ResourceManager.
 
 ## Facts about the station (measured)
 
@@ -65,6 +77,21 @@ so that this project does not depend on reading it.
 - Do not read deep memory (RAW) while waveform recording is enabled: it returns a record that is none of
   the recorded frames. The scope plug refuses to.
 - `:DISP:DATA? PNG` returns a complete 1024 x 600 PNG in 0.2 to 0.3 s and changes no setting.
+
+## Both plugs in one process (measured 2026-10-05, generator on LAN, scope on USB)
+
+- Each plug survives the other's `tearDown()`: the scope answered after the generator plug was closed, and
+  a generator session answered after the scope plug was closed.
+- SINE 1 kHz 2 Vpp read 2.036 Vpp, 999.2 Hz at 500 mV/div.
+- A scope measurement read right after `OUTP OFF` still showed the old value (2.02 Vpp): wait before
+  reading.
+- **`set_state()` after a `:MEAS:ITEM?` query does nothing, and reports nothing.** Scope alone, one
+  session: `reset()`, `apply_setup()`, `set_state(saved)` restores the settings. With one `measure('VPP', 1)`
+  before `set_state()` the timebase and the scale stay as set by the test, `:SYST:ERR?` is empty, and
+  `set_state()` raises nothing. A 2 s pause does not help. A second `set_state()` works, and so does a
+  restore from a fresh session. 5 runs, the generator plug present or not makes no difference. So a station
+  test that measures and then relies on the scope plug's restore leaves the scope changed. Until the scope
+  plug handles it: restore, read a setting back, restore again if it did not take.
 
 The scope is a shared instrument with the user's own setup on it: a station test saves its state first,
 restores it at the end and reports whether the restore worked.

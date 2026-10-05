@@ -18,6 +18,9 @@ dependencies = [
 
 [project.optional-dependencies]
 usb = ["pyusb"]
+station = [
+    "rigol-dho-openhtf",
+]
 
 [dependency-groups]
 dev = ["pytest", "mypy"]
@@ -39,3 +42,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["tests.*", "example_test"]
 disallow_untyped_decorators = false
+
+[tool.uv.sources]
+rigol-dho-openhtf = { git = "https://github.com/pjaako/rigol-dho-openhtf", rev = "d6cb29ded8f2ac5db1ccfb418eb12da19a82b003" }
