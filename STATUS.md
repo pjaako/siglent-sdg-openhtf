@@ -36,6 +36,7 @@ local session, branch `hardware-session-1`. Measured facts: `SPEC-hardware-1.md`
 | STOP | First hardware session: `tools/probe.py` and `example_test.py` on the SDG2042X, from a local session on the LAN | done 2026-10-05 |
 | T6 | `SPEC-hardware-1.md`: hardware findings into the fake, validator, tolerances, README | done, accepted on hardware |
 | T7 | `SPEC-station.md` → `examples/station_demo.py` with rigol-dho-openhtf | **next** |
+| V1 | Hardware check: signal levels with `LOAD,50` and a real 50 ohm load at the output (a feed-through terminator at the scope input). Expect the scope to read what `BSWV?` shows. The agent must ask the human to fit the terminator first, and to remove it afterwards. | open, needs the human |
 | later | SPEC-arb, SPEC-modulation, SPEC-counter-sync | each needs a hardware session |
 
 ## Hardware access
@@ -54,9 +55,19 @@ Use VXI-11. Port 5025 (raw socket, PG02 §1.2.4) refused the connection on this 
 `*RST`, so the generator's previous settings are lost; it ends with both outputs off. Check the address
 with a single `*IDN?` first: other Siglent instruments on the same LAN answer SCPI too.
 
+## Measured at the output (2026-10-05, generator CH1 -> BNC cable -> DHO814 CH1, 1 Mohm, no load)
+
+SINE 1 kHz 2 Vpp reads 2.04 Vpp, 1000.0 Hz; SQUARE 3 Vpp, offset 1.5 V, duty 30 % reads 3.04 / -0.04 V and
+duty 0.300; SINE 1 MHz 4 Vpp reads 4.03 Vpp. `LOAD,50` with `AMP,1` gives the same 2 Vpp into the open
+input: `LOAD` only changes what is displayed. `PLRT,INVT` inverts the offset too (+0.5 V set, -0.5 V out).
+Found there: `tearDown()` closed PyVISA's process-wide ResourceManager and with it the scope's session;
+fixed, the manager is no longer closed.
+
 ## Open questions
 
-- How to import `rigol-dho-openhtf` for the station demo (it has no `pyproject.toml`).
+- `rigol-dho-openhtf` now has a `pyproject.toml` (flat modules `rigol_dho_plug`, `capture`, `golden`,
+  `fake_resource`; owner decision 2026-10-05). It is in that repository's working tree, not committed yet.
+  T7 adds it to this project as an optional dependency.
 - Not modelled or not measured in session 1 (README "Things the manual does not tell you",
   `SPEC-hardware-1.md` addendum): the load rescale for loads other than 50 ohm, the PULSE width limit with
   long edges, the level window above 20 MHz at a numeric load, SDG2082X/SDG2122X limits, USB.

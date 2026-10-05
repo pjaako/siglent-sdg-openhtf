@@ -124,13 +124,14 @@ class SiglentSdgPlug(BasePlug):  # type: ignore[misc]  # OpenHTF is untyped
     def __init__(self, resource: _VisaResource | None = None) -> None:
         super().__init__()
         self._resource: _VisaResource | None = None
-        self._rm: Any = None  # the ResourceManager this plug opened, if any
         self._torn_down = False
         try:
             if resource is None:
-                self._rm = pyvisa.ResourceManager("@py")
-                name = _resolve_resource_name(self._rm, str(CONF.siglent_sdg_resource))
-                resource = self._rm.open_resource(name)
+                # PyVISA hands out one ResourceManager per backend to the whole process. It is never closed
+                # here: closing it closes the sessions of every other plug too (measured with a scope plug).
+                rm: Any = pyvisa.ResourceManager("@py")
+                name = _resolve_resource_name(rm, str(CONF.siglent_sdg_resource))
+                resource = rm.open_resource(name)
             self._resource = resource
             resource.timeout = CONF.siglent_sdg_timeout_ms
             resource.read_termination = _TERMINATION
@@ -279,19 +280,13 @@ class SiglentSdgPlug(BasePlug):  # type: ignore[misc]  # OpenHTF is untyped
     # ------------------------------------------------------------------------------------------------
 
     def _release(self) -> None:
-        """Close the resource, then the ResourceManager this plug opened. Never raises."""
+        """Close the resource. The shared PyVISA ResourceManager stays open. Never raises."""
         resource, self._resource = self._resource, None
-        rm, self._rm = self._rm, None
         if resource is not None:
             try:
                 resource.close()
             except Exception:
                 self.logger.warning("closing the VISA resource failed", exc_info=True)
-        if rm is not None:
-            try:
-                rm.close()
-            except Exception:
-                self.logger.warning("closing the VISA ResourceManager failed", exc_info=True)
 
     def tearDown(self) -> None:
         """Both outputs off (``C1:OUTP OFF``, ``C2:OUTP OFF``, PG02 §3.3), then close. Idempotent, never raises.

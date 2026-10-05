@@ -119,6 +119,9 @@ replays it in `tests/test_hardware_session_1.py`.
 - Small things the fake does not model: `PERI` is computed in single precision (20001220 Hz reads
   `4.99969e-08S`); a PULSE duty at the width limit read `99.992` where the formula gives 99.9919.
 - `MAX_OUTPUT_AMP,5` was accepted, is not echoed and had no visible effect: `AMP,10` was still accepted.
+- `PLRT,INVT` inverts the offset as well as the waveform (measured with a scope: +0.5 V set, -0.5 V out).
+- PyVISA gives the whole process one ResourceManager per backend. The plug never closes it: closing it
+  closes the sessions of every other instrument plug in the same test.
 - Still open: USB via pyvisa-py (reports from other projects say it is unreliable); the other two models.
 
 ## Files
