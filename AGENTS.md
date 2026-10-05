@@ -36,6 +36,14 @@ it is the contract. Read `STATUS.md`; it says where the project stands and what 
   key sets per waveform type, number formats and tolerances are hypotheses built from PG02 examples;
   they are marked as such in the code. Every feature gets a run on hardware before it is called done,
   and each finding goes back into the fake.
+- A fake is accepted only against the instrument: send a command sequence the fake was not built from to
+  the fake and to the generator at once and compare every reply. Replaying the recon transcript proves only
+  that the fake matches what was already asked. Sanitized transcripts live in `tests/data/`; `#!` marks
+  what was measured but is not modelled.
+- Before sending anything to an address, identify the instrument with a single `*IDN?`: other Siglent
+  instruments on the same LAN answer SCPI too, and the probe starts with `*RST`.
+- Other instruments in the same process share PyVISA's ResourceManager; never close it. An instrument that
+  is not ours (the scope) gets its state saved to disk before the first change and restored at the end.
 - Set OpenHTF config keys after importing the plug module (`CONF.load(...)` before the key is declared
   is lost).
 - `mypy --strict` (configured in `pyproject.toml`) must stay clean.
