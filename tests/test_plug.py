@@ -141,10 +141,11 @@ def test_get_basic_wave_typed_values() -> None:
     plug, fake = _plug()
     wave = plug.get_basic_wave(1)
     assert fake.log == ["C1:BSWV?"]  # PG02 §3.4
-    assert wave["FRQ"] == 100.0
+    assert wave["FRQ"] == 1000.0  # measured default after *RST
     assert wave["WVTP"] == "SINE"
-    assert wave["AMP"] == 2.0
-    assert wave["LLEV"] == -1.0
+    assert wave["AMP"] == 4.0
+    assert wave["AMPVRMS"] == 1.414
+    assert wave["LLEV"] == -2.0
     assert list(wave)[:3] == ["WVTP", "FRQ", "PERI"]
 
 
@@ -188,7 +189,7 @@ def test_reset_log_and_effect() -> None:
     fake.log.clear()
     plug.reset()
     assert fake.log == ["*RST", "*OPC?"]  # PG02 §3.1.3, §3.1.2
-    assert plug.get_basic_wave(1)["FRQ"] == 100.0
+    assert plug.get_basic_wave(1)["FRQ"] == 1000.0
 
 
 def test_reset_with_bad_opc_is_a_protocol_error() -> None:
@@ -324,31 +325,46 @@ def test_apply_setup_empty_setup_sends_nothing() -> None:
 def test_two_rejected_keys_give_one_setup_error_naming_both() -> None:
     plug, fake = _plug(reject=["C1:BSWV FRQ", "C1:BSWV AMP"])
     with pytest.raises(SetupError) as info:
-        plug.apply_setup({"C1": {"BSWV": {"WVTP": "SINE", "FRQ": 1000, "AMP": 5, "OFST": 0.5}}})
+        plug.apply_setup({"C1": {"BSWV": {"WVTP": "SINE", "FRQ": 2000, "AMP": 5, "OFST": 0.5}}})
     assert info.value.failures == [
-        "C1:BSWV FRQ: sent 1000, read 100HZ",
-        "C1:BSWV AMP: sent 5, read 2V",
+        "C1:BSWV FRQ: sent 2000, read 1000HZ",
+        "C1:BSWV AMP: sent 5, read 4V",
     ]
     assert str(info.value) == "\n".join(info.value.failures)
     assert fake.log.count("C1:BSWV?") == 1  # one query, all mismatches at once
 
 
 def test_mismatches_on_bswv_and_outp_are_collected_together() -> None:
-    plug, _ = _plug(reject=["C1:BSWV FRQ", "C1:OUTP ON"])
+    plug, _ = _plug(reject=["C1:OUTP LOAD", "C1:OUTP ON"])
     with pytest.raises(SetupError) as info:
         plug.apply_setup(EXAMPLE_SETUP)
     assert info.value.failures == [
-        "C1:BSWV FRQ: sent 1000, read 100HZ",
+        "C1:OUTP LOAD: sent 50, read HZ",
         "C1:OUTP STATE: sent ON, read OFF",
     ]
 
 
 def test_key_not_echoed_is_reported() -> None:
-    # The fake echoes AMPVRMS only as AMP (hypothesis until hardware session 1), so it is "not echoed".
+    # Measured: the generator ignores AMPDBM at LOAD HZ and echoes no AMPDBM, so it is "not echoed".
     plug, _ = _plug()
     with pytest.raises(SetupError) as info:
-        plug.apply_setup({"C1": {"BSWV": {"WVTP": "SINE", "AMPVRMS": 1.0}}})
-    assert info.value.failures == ["C1:BSWV AMPVRMS: not echoed by the generator"]
+        plug.apply_setup({"C1": {"BSWV": {"WVTP": "SINE", "AMPDBM": 3.0}}})  # PG02 §3.4
+    assert info.value.failures == ["C1:BSWV AMPDBM: not echoed by the generator"]
+
+
+def test_max_output_amp_is_reported_as_not_echoed() -> None:
+    # PG02 §3.3 MAX_OUTPUT_AMP: accepted by the generator, echoed nowhere (measured)
+    plug, _ = _plug()
+    with pytest.raises(SetupError) as info:
+        plug.apply_setup({"C1": {"BSWV": {"MAX_OUTPUT_AMP": 5}}})
+    assert info.value.failures == ["C1:BSWV MAX_OUTPUT_AMP: not echoed by the generator"]
+
+
+def test_ampvrms_and_ampdbm_verify_when_echoed() -> None:
+    # measured: AMPVRMS is echoed as written, AMPDBM too at a numeric load
+    plug, _ = _plug()
+    plug.apply_setup({"C1": {"OUTP": {"LOAD": 50}, "BSWV": {"WVTP": "SINE", "AMPVRMS": 1.0}}})  # PG02 §3.3, §3.4
+    plug.apply_setup({"C1": {"BSWV": {"AMPDBM": 3.0}}})  # PG02 §3.4
 
 
 def test_invalid_setup_raises_value_error_and_sends_nothing() -> None:
@@ -382,7 +398,15 @@ def test_check_limits_off_lets_50_mhz_through_and_read_back_catches_it() -> None
     with pytest.raises(SetupError) as info:
         plug.apply_setup({"C1": {"BSWV": {"WVTP": "SINE", "FRQ": 50e6}}})
     assert fake.log[0:2] == ["C1:BSWV WVTP,SINE", "C1:BSWV FRQ,50000000"]
-    assert info.value.failures == ["C1:BSWV FRQ: sent 50000000, read 100HZ"]
+    assert info.value.failures == ["C1:BSWV FRQ: sent 50000000, read 40000000HZ"]  # clamped, no error
+
+
+def test_check_limits_off_square_30_mhz_is_clamped_and_read_back_names_the_key() -> None:
+    CONF.load(siglent_sdg_check_limits=False)
+    plug, _ = _plug()
+    with pytest.raises(SetupError) as info:
+        plug.apply_setup({"C1": {"BSWV": {"WVTP": "SQUARE", "FRQ": 30e6}}})  # PG02 §3.4
+    assert info.value.failures == ["C1:BSWV FRQ: sent 30000000, read 25000000HZ"]
 
 
 def test_verify_false_sends_no_queries() -> None:
@@ -489,7 +513,7 @@ def test_every_string_sent_is_a_pg02_command() -> None:
     plug, fake = _plug()
     plug.reset()
     plug.apply_setup(EXAMPLE_SETUP)
-    plug.apply_setup({"C2": {"BSWV": {"WVTP": "PULSE", "DUTY": 20, "WIDTH": 1e-6, "FRQ": 1e3}}})
+    plug.apply_setup({"C2": {"BSWV": {"WVTP": "PULSE", "DUTY": 20, "WIDTH": 2e-4, "FRQ": 1e3}}})
     plug.set_output(2, {"STATE": True, "LOAD": "HZ", "PLRT": "INVT"})
     plug.set_basic_wave(1, {"WVTP": "NOISE", "STDEV": 0.1, "BANDSTATE": True})
     plug.get_basic_wave(2)
@@ -682,7 +706,7 @@ def test_openhtf_integration() -> None:
 
 
 def test_openhtf_failing_measurement_still_tears_down() -> None:
-    fake = FakeSdgResource(reject=["C1:BSWV AMP"])
+    fake = FakeSdgResource(reject=["C1:OUTP ON"])
 
     class InjectedPlug(SiglentSdgPlug):
         def __init__(self) -> None:
@@ -690,7 +714,7 @@ def test_openhtf_failing_measurement_still_tears_down() -> None:
 
     @htf.plug(generator=InjectedPlug)
     def apply(test: Any, generator: InjectedPlug) -> None:
-        generator.apply_setup(EXAMPLE_SETUP)  # AMP is rejected by the fake: SetupError fails the phase
+        generator.apply_setup(EXAMPLE_SETUP)  # OUTP ON is rejected by the fake: SetupError fails the phase
 
     assert htf.Test(apply).execute(test_start=lambda: "dut1") is False
     assert fake.log[-2:] == ["C1:OUTP OFF", "C2:OUTP OFF"]
