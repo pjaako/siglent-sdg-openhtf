@@ -33,14 +33,18 @@ testpaths = ["tests"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests", "example_test.py", "tools"]
+files = ["src", "tests", "example_test.py", "tools", "examples"]
 
 [[tool.mypy.overrides]]
 module = ["openhtf", "openhtf.*", "pyvisa", "pyvisa.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["tests.*", "example_test"]
+module = ["rigol_dho_openhtf", "rigol_dho_openhtf.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*", "example_test", "station_demo"]
 disallow_untyped_decorators = false
 
 [tool.uv.sources]

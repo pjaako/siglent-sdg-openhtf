@@ -1,13 +1,14 @@
-# SPEC-station: generator + oscilloscope demo (placeholder)
+# SPEC-station: generator + oscilloscope demo (T7)
 
-Not written yet. Goal: `examples/station_demo.py`, an OpenHTF test that drives this plug and the scope plug
-of `rigol-dho-openhtf` (https://github.com/pjaako/rigol-dho-openhtf) together: the SDG2042X feeds a signal
-into the DHO814, the scope measures Vpp and frequency, and both are recorded with limits. Must run with
-both fakes (`--fake`).
+Decision behind this work (human owner, 2026-10-05): one OpenHTF test drives this plug and the scope plug
+of `rigol-dho-openhtf` together. The SDG2042X feeds a signal into the DHO814, the scope measures it, and
+the readings are recorded with limits. This is the first check of the signal at the connector rather than
+of the generator's read-back. The scope package is an optional dependency (extra `station`, pinned to
+`829ff0d` through `[tool.uv.sources]`); `uv sync --all-extras --dev` installs it.
 
-Owner decision 2026-10-05: `rigol-dho-openhtf` is a proper package and an optional dependency here.
-Done: extra `station` in `pyproject.toml`, pinned to commit `829ff0d` of its `main` through
-`[tool.uv.sources]`; `uv sync --all-extras --dev` installs it. The rest of this spec is still to be written.
+**The real instruments are NOT available to you.** Use `FakeSdgResource` and `FakeDhoResource`. Read
+`AGENTS.md`, this file to the end (the facts come first, the numbered sections after them), `example_test.py`
+and `tests/test_examples.py`. Do not commit.
 
 ## The scope package (as of `829ff0d`)
 
@@ -98,3 +99,131 @@ so that this project does not depend on reading it.
 
 The scope is a shared instrument with the user's own setup on it: a station test saves its state first,
 restores it at the end and reports whether the restore worked.
+
+## 1. `examples/station_demo.py`
+
+`uv run python examples/station_demo.py --fake` runs without hardware. On hardware:
+`uv run python examples/station_demo.py --generator 192.0.2.10 [--scope NAME]` (`--scope` empty: the scope
+plug finds the first USB scope itself). `--generator` goes into `CONF.siglent_sdg_resource`, `--scope` into
+`CONF.rigol_dho_resource`, both loaded after the plug modules are imported. Without `--fake` and without
+`--generator` the script exits with a usage error. Last line printed: `station: PASS` or `station: FAIL`;
+exit code 0 or 1. No station server, no web GUI. Same shape and style as `example_test.py`.
+
+Test conditions are data, one list `STEPS` at the top of the file; each step is a dict:
+
+| Key | Meaning |
+|---|---|
+| `name` | phase name, a Python identifier |
+| `generator` | the `C1` part of a generator setup (`OUTP`, `BSWV`), as for `apply_setup` |
+| `scope` | SCPI settings for `RigolDhoPlug.apply_setup`: `:TIM:MAIN:SCAL`, `:CHAN1:SCAL`, `:CHAN1:OFFS`, `:TRIG:EDGE:LEV` |
+| `expect` | measurement name to nominal value: `vpp` (V) and `frequency_hz` |
+
+The steps, from the measured table above (all with `OUTP STATE` on):
+
+| name | generator | scope | expect |
+|---|---|---|---|
+| `sine_1khz` | `LOAD` `HZ`; SINE, `FRQ` 1000, `AMP` 2, `OFST` 0 | 200 us/div, 0.5 V/div, offset 0, level 0 | vpp 2, 1000 Hz |
+| `sine_1khz_load_50` | `LOAD` 50; SINE, `FRQ` 1000, `AMP` 1, `OFST` 0 | the same | vpp 2, 1000 Hz |
+| `square_1khz` | `LOAD` `HZ`; SQUARE, `FRQ` 1000, `AMP` 3, `OFST` 1.5, `DUTY` 30 | 200 us/div, 1 V/div, offset -1.5, level 1.5 | vpp 3, 1000 Hz |
+| `sine_1mhz` | `LOAD` `HZ`; SINE, `FRQ` 1e6, `AMP` 4, `OFST` 0 | 200 ns/div, 1 V/div, offset 0, level 0 | vpp 4, 1e6 Hz |
+
+- Limits: `vpp` within +-5 % of nominal, `frequency_hz` within +-1 % (the scope read up to 3 % high on Vpp
+  and 0.44 % off on frequency). Two constants at the top of the file.
+- One OpenHTF phase per step, built by one factory function from the step dict, with the measurements
+  `vpp` (VOLT) and `frequency_hz` (HERTZ) and the phase name from `name`. A last phase `output_off`
+  switches `C1` off with `apply_setup` and records `vpp_off` with limit `< 0.2` V (the scope read 0.05 V of
+  noise).
+- Before the first phase runs (at import of `STEPS`, or in a first phase `scope_setup`): the common scope
+  settings `:CHAN1:DISP` on, `:CHAN1:PROB` 1, `:CHAN1:COUP` `DC`, `:TRIG:MODE` `EDGE`, `:TRIG:EDGE:SOUR`
+  `CHAN1`, `:TRIG:EDGE:SLOP` `POS`, `:TRIG:SWE` `AUTO`. The scope is not reset: the scope plug restores the
+  user's state in its own `tearDown()` (that is why every step changes the timebase or the scale).
+- Input protection, checked for every step before anything is sent (`ValueError` naming the step): the
+  open-circuit peak `(abs(OFST) + AMP/2) / k` must not exceed 5 V, with `k = 1` for `LOAD` `HZ` and
+  `LOAD/(LOAD+50)` for a numeric load. A constant `MAX_INPUT_V = 5.0`. A step whose generator setup has no
+  `AMP` (levels given another way) is refused too: the demo only knows `AMP` and `OFST`.
+- Reading the scope, one helper: wait `SETTLE_S` (1.5 s), query every item once and discard the answer,
+  wait `MEASURE_S` (0.7 s), read every item. Items: `VPP` and `FREQ`. A reading of `9.9E+37` is recorded as
+  it is (it fails the limit); no retry loop. For `output_off` only `VPP`. With `--fake` both waits are 0.
+- `--fake`: both plugs are subclasses whose `__init__` injects the fakes, as in `example_test.py`. The two
+  fakes must be wired, or the scope fake would answer 3.3 to everything: section 2.
+
+## 2. The wired fake scope (in `examples/station_demo.py`, used only with `--fake`)
+
+`WiredFakeScope(FakeDhoResource)`, constructed with the `FakeSdgResource` it is cabled to. It overrides
+`query`: it always calls the parent first (the parent logs the command and keeps the "setup block dropped
+after a measurement" behaviour), then for `:MEAS:ITEM? <item>,CHAN1` replaces the answer:
+
+- the first query of an item answers `9.9E+37`, like the scope; later ones the value;
+- the value comes from the generator fake's own replies to `C1:OUTP?` (PG02 §3.3) and `C1:BSWV?` (PG02
+  §3.4), asked through the generator fake's `query`: output off gives `VPP` 0.05; output on gives `VPP` =
+  `AMP / k` and `FREQ` = `FRQ`, with `k` from the `LOAD` in the `OUTP?` reply (`HZ` is 1). This is the
+  measured relation: the scope's 1 Mohm input sees the open-circuit voltage.
+- any other item or channel: the parent's answer.
+
+The generator fake's `log` therefore also holds these queries; tests that look at the end of the log must
+look for the last write.
+
+## 3. Tests (`tests/test_station_demo.py`; no hardware, no sleeps, no network)
+
+1. `subprocess.run([sys.executable, 'examples/station_demo.py', '--fake'])` from the repo root exits 0 and
+   the last line is `station: PASS`.
+2. Without `--fake` and without `--generator`: exit code 2, nothing opened.
+3. Importing the module opens no resource.
+4. In process, with the fakes: the test passes; the generator fake's last two writes are `C1:OUTP OFF`,
+   `C2:OUTP OFF`; the scope fake received a setup block write (`:SYST:SET`) after the last measurement, and
+   its timebase and channel 1 scale read back as before the test (the restore worked through the dropped
+   block).
+5. A generator that ignores the amplitude (`FakeSdgResource(reject=['C1:BSWV AMP'])`): the test does not
+   pass (the generator plug raises `SetupError`).
+6. A cable fault, modelled by a wired fake scope that reports half the amplitude: the outcome is FAIL and
+   the failed measurement is `vpp` of the first step.
+7. Input protection: a step with `AMP` 12, `OFST` 0, `LOAD` `HZ` raises `ValueError` naming the step, and
+   so does `AMP` 6 with `LOAD` 50 (6 V open-circuit peak); nothing is written to either fake. A step without
+   `AMP` raises too.
+8. `WiredFakeScope`: first query `9.9E+37`, then the value; `LOAD` 50 with `AMP` 1 reads 2; output off
+   reads 0.05.
+9. All existing tests keep passing unmodified.
+
+## 4. Documentation and configuration
+
+- `README.md`: a section "Station demo" after "Setup", at most 20 lines: what it does, the two commands,
+  the wiring it assumes (generator CH1 to scope CH1, 1:1 cable, no terminator, 1 Mohm input), the 5 V
+  input guard, and that the scope's own settings are restored at the end. Add the file to "Files".
+- `pyproject.toml`: add `examples` to the mypy `files`; if the scope package has no type information, one
+  more `[[tool.mypy.overrides]]` for `rigol_dho_openhtf` and `rigol_dho_openhtf.*` with
+  `ignore_missing_imports = true` (and `follow_untyped_imports` is not to be used). Nothing else changes
+  there; the dependency is already in place.
+- Do not touch `STATUS.md`, `AGENTS.md`, `SPEC*.md`, `src/`.
+
+## Done means
+
+- `uv run pytest -q` passes; `uv run mypy` prints `Success`.
+- `uv run python examples/station_demo.py --fake` ends with `station: PASS`.
+- `uv run python example_test.py --fake` still prints `example: PASS`.
+- `git status --short` shows only: `examples/station_demo.py`, `tests/test_station_demo.py`, `README.md`,
+  `pyproject.toml`.
+
+Report: files changed, the final test line verbatim, the output of the commands above, every place where
+this spec was wrong or ambiguous or where you deviated and why, what is untested, and anything that looks
+like a bug in existing code that you did not touch.
+
+## Acceptance on the instruments (owner, 2026-10-05)
+
+Generator on LAN, scope on USB, CH1 to CH1, no terminator. The demo as shipped: PASS, three runs.
+
+| Phase | vpp | frequency_hz |
+|---|---|---|
+| `sine_1khz` | 2.018 V | 1001.2 |
+| `sine_1khz_load_50` | 2.018 V | 1000.4 |
+| `square_1khz` | 3.070 V | 1000.0 |
+| `sine_1mhz` | 4.038 V | 1 000 700 |
+| `output_off` | 0.06 V | |
+
+- A generator set 20 % low on purpose (`AMP` 1.6 against an expected 2 Vpp): the scope read 1.62 V and the
+  test failed on `vpp`. The limits bite on hardware.
+- The scope's settings read back 2 s after each run were the ones from before the run; the generator's
+  outputs were off.
+- The spec's test 7 named `AMP` 4 at `LOAD` 50 as too high; that is a 4 V peak and passes the guard. The
+  test uses `AMP` 6.
+- Not checked: the limits just outside their edges, `--scope` with an explicit resource name, the scope on
+  LAN.
