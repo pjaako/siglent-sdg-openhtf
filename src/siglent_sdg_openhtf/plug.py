@@ -3,7 +3,8 @@
 The only source of SCPI is the official guide PG02-E05C (``docs/PG02-E05C.txt``, "PG02"). Every command
 literal below carries its section. The plug sends nothing else, ever: on this family an undefined query can
 hang the generator's VXI-11 service until a power cycle. All channel commands are built by ``scpi.build_command``
-(``build_outp`` / ``build_bswv``) and all channel replies are parsed by ``scpi.parse_reply`` / ``scpi.typed_fields``.
+(OUTP, BSWV, MDWV, SWWV and BTWV) and all channel replies are parsed by ``scpi.parse_reply`` /
+``scpi.parse_mod_reply`` / ``scpi.typed_fields``.
 
 The plug stays thin: test conditions are data (``Setup``), validated before anything is sent, written in a
 safe order, read back and verified; every mismatch is reported at once. PG02 documents no error queue for
@@ -19,6 +20,7 @@ from openhtf.util import configuration
 
 from .models import ModelLimits, limits_for
 from .scpi import (
+    MOD_GROUPS,
     ProtocolError,
     Reply,
     Setup,
@@ -27,8 +29,11 @@ from .scpi import (
     build_outp,
     channel_name,
     format_value,
+    is_on,
     order_setup,
+    parse_mod_reply,
     parse_reply,
+    strip_unit,
     typed_fields,
     validate_setup,
     values_match,
@@ -211,13 +216,40 @@ class SiglentSdgPlug(BasePlug):  # type: ignore[misc]  # OpenHTF is untyped
         """``<ch>:OUTP?`` (PG02 §3.3): ``STATE`` (``ON``/``OFF``), ``LOAD`` (``HZ`` or a float), ``PLRT``."""
         return typed_fields(self._query_outp(channel))
 
+    def _query_mod(self, channel: int, group: str) -> tuple[dict[str, str], dict[str, str]]:
+        ch = channel_name(channel)
+        raw = self.query(f"{ch}:{group}?")  # PG02 §3.5 (MDWV), §3.6.1 (SWWV), §3.7 (BTWV)
+        return parse_mod_reply(raw, f"{ch}:{group}")
+
+    def _get_mod(self, channel: int, group: str) -> dict[str, float | str]:
+        own, _ = self._query_mod(channel, group)
+        return {key: strip_unit(val) for key, val in own.items()}
+
+    def get_modulation(self, channel: int) -> dict[str, float | str]:
+        """``<ch>:MDWV?`` (PG02 §3.5): own fields with units stripped (``STATE``, ``TYPE``, ``FRQ`` ...), no carrier."""
+        return self._get_mod(channel, "MDWV")
+
+    def get_sweep(self, channel: int) -> dict[str, float | str]:
+        """``<ch>:SWWV?`` (PG02 §3.6.1): own fields with units stripped, no carrier."""
+        return self._get_mod(channel, "SWWV")
+
+    def get_burst(self, channel: int) -> dict[str, float | str]:
+        """``<ch>:BTWV?`` (PG02 §3.7): own fields with units stripped (``TIME`` may be ``'INF'``), no carrier."""
+        return self._get_mod(channel, "BTWV")
+
+    @staticmethod
+    def _command(channel: int, group: str, key: str, value: object, params: Mapping[str, object]) -> str:
+        """``build_command``; an MDWV parameter takes the ``TYPE`` of the same group (the validator guarantees it)."""
+        mdwv_type = params.get("TYPE") if group == "MDWV" else None
+        return build_command(channel, group, key, value, mdwv_type=mdwv_type if isinstance(mdwv_type, str) else None)
+
     def _send_group(self, channel: int, group: str, params: Mapping[str, object]) -> None:
         """Validate and write one group of one channel in ``order_setup`` order."""
         ch = channel_name(channel)
         setup: Setup = {ch: {group: params}}
         validate_setup(setup, self._limits_to_check())
         for _, key, value in order_setup({group: params}):
-            self.write(build_command(channel, group, key, value))
+            self.write(self._command(channel, group, key, value, params))
 
     def set_basic_wave(self, channel: int, params: Mapping[str, object]) -> None:
         """One ``<ch>:BSWV <key>,<value>`` (PG02 §3.4) per key, in ``order_setup`` order; no verification.
@@ -230,6 +262,28 @@ class SiglentSdgPlug(BasePlug):  # type: ignore[misc]  # OpenHTF is untyped
     def set_output(self, channel: int, params: Mapping[str, object]) -> None:
         """One ``<ch>:OUTP ...`` (PG02 §3.3) per key, in ``order_setup`` order; no verification."""
         self._send_group(channel, "OUTP", params)
+
+    def set_modulation(self, channel: int, params: Mapping[str, object]) -> None:
+        """``<ch>:MDWV ...`` (PG02 §3.5), validated and written in ``order_setup`` order; no verification."""
+        self._send_group(channel, "MDWV", params)
+
+    def set_sweep(self, channel: int, params: Mapping[str, object]) -> None:
+        """``<ch>:SWWV ...`` (PG02 §3.6.1), validated and written in ``order_setup`` order; no verification."""
+        self._send_group(channel, "SWWV", params)
+
+    def set_burst(self, channel: int, params: Mapping[str, object]) -> None:
+        """``<ch>:BTWV ...`` (PG02 §3.7), validated and written in ``order_setup`` order; no verification."""
+        self._send_group(channel, "BTWV", params)
+
+    def manual_trigger(self, channel: int, group: str) -> None:
+        """``<ch>:SWWV MTRIG`` or ``<ch>:BTWV MTRIG`` (PG02 §3.6.1, §3.7). The generator echoes nothing for it."""
+        ch = channel_name(channel)
+        if group == "SWWV":
+            self.write(f"{ch}:SWWV MTRIG")  # PG02 §3.6.1
+        elif group == "BTWV":
+            self.write(f"{ch}:BTWV MTRIG")  # PG02 §3.7
+        else:
+            raise ValueError(f"manual trigger exists for 'SWWV' and 'BTWV' only, got {group!r}")
 
     def _limits_to_check(self) -> ModelLimits | None:
         return self.limits if CONF.siglent_sdg_check_limits else None
@@ -247,25 +301,32 @@ class SiglentSdgPlug(BasePlug):  # type: ignore[misc]  # OpenHTF is untyped
         for ch_name, groups in setup.items():
             channel = int(ch_name[1:])  # validated to be C1 or C2
             for group, key, value in order_setup(groups):
-                self.write(build_command(channel, group, key, value))
+                self.write(self._command(channel, group, key, value, groups.get(group, {})))
                 commands += 1
                 touched.setdefault(channel, {}).setdefault(group, {})[key] = value
         failures: list[str] = []
         if verify:
             for channel, groups in touched.items():
                 ch_name = channel_name(channel)
-                for group in ("BSWV", "OUTP"):  # PG02 §3.4, §3.3; one query per touched group
+                # PG02 §3.4, §3.3, §3.5, §3.6.1, §3.7; one query per touched group
+                for group in ("BSWV", "OUTP", *MOD_GROUPS):
                     sent = groups.get(group)
                     if not sent:
                         continue
-                    reply = self._query_outp(channel) if group == "OUTP" else self._query_bswv(channel)
-                    typed = typed_fields(reply)
+                    if group in MOD_GROUPS:
+                        raw_fields, _ = self._query_mod(channel, group)
+                    else:
+                        reply = self._query_outp(channel) if group == "OUTP" else self._query_bswv(channel)
+                        raw_fields = reply.fields
+                    typed = {key: strip_unit(val) for key, val in raw_fields.items()}
+                    if group in MOD_GROUPS and "STATE" in sent and not is_on(sent["STATE"]):
+                        sent = {"STATE": sent["STATE"]}  # switched off: the generator answers only STATE,OFF
                     for key, value in sent.items():
                         where = f"{ch_name}:{group} {key}"
                         if key not in typed:
                             failures.append(f"{where}: not echoed by the generator")
                         elif not values_match(key, value, typed[key]):
-                            failures.append(f"{where}: sent {format_value(value)}, read {reply.fields[key]}")
+                            failures.append(f"{where}: sent {format_value(value)}, read {raw_fields[key]}")
         self.logger.info(
             "apply_setup: channels %s, %d commands, verification %s",
             ", ".join(channel_name(c) for c in touched) or "none",
