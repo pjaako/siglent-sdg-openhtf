@@ -40,7 +40,8 @@ The scope was on USB, the generator on LAN (VXI-11).
 - `PLRT,INVT` inverts the offset as well as the waveform.
 - The scope reads 1 to 3 % high on Vpp at these scales (1 V/div); limits in the demo must allow for it.
 - The 1004.4 Hz on the ramp is the scope's frequency measurement, not checked further.
-- Not measured: levels with `LOAD,50` and a real 50 ohm load (task V1 in `STATUS.md`).
+- Levels with `LOAD,50` and a real 50 ohm load: measured 2026-10-12 (task V1), README "Measured at the output
+  with a 50 ohm load": the scope reads what `BSWV?` shows at `LOAD,50`, half of `AMP` at `LOAD,HZ`.
 - Both plugs open their instrument through PyVISA's one process-wide ResourceManager. A plug that closes
   it in `tearDown()` closes the other plug's session. This plug no longer does; the scope plug must not
   either.

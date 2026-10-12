@@ -144,6 +144,20 @@ counts, peak-to-peak per carrier period for the envelope. The scope reads about 
   `PRD,0.02`: 12 cycles, 6.0 ms active, 20.0 ms period; between bursts the output sits at the low level
   (-1 V at `AMP,2`), not at 0 V.
 
+## Measured at the output with a 50 ohm load (2026-10-12, task V1)
+
+A 50 ohm feed-through terminator at the scope input, generator CH1 to it over a BNC cable; the scope's
+`:MEAS:ITEM?` readings, which run 1.5 to 4 % high at these scales (the square the most, edge overshoot).
+
+- `LOAD,50`, `AMP,1`: 1.017 Vpp at the load. `LOAD,HZ`, `AMP,2`: 1.016 Vpp. So the generator is a 50 ohm source
+  whose open-circuit level is `AMP * (LOAD+50) / LOAD` at a numeric load and `AMP` at `HZ`; `LOAD` only tells it
+  what you will connect. Into a real 50 ohm the scope reads what `BSWV?` shows at `LOAD,50`.
+- `LOAD,75`, `AMP,1` into the 50 ohm load: 0.848 Vpp (model `1 * 125/75 * 50/100 = 0.833`, plus the scope's bias).
+- `OFST,0.25` at `LOAD,50`: +0.765 / -0.253 V at the load; the offset scales like the amplitude. With `PLRT,INVT`:
+  +0.259 / -0.757 V, the offset inverted too, as without a load.
+- SQUARE `AMP,2`, `DUTY,30` at `LOAD,50`: 2.07 Vpp, duty 0.300. SINE 1 MHz `AMP,2`: 2.04 Vpp, 999.3 kHz.
+- Output off into 50 ohm: 15 mVpp of noise (50 mVpp open).
+
 ## Things the manual does not tell you
 
 - `SYST:ERR?` (not in PG02) answered `+0, No error` and `*CLS` was accepted, also right after clamped writes.

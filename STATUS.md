@@ -13,6 +13,8 @@ reached over VXI-11 from there (the scope on LAN too, no USB passthrough needed)
 - **Station demo** (`examples/station_demo.py`): generator into a Rigol DHO814 in one OpenHTF test; passes on
   both instruments (2026-10-05 over USB, 2026-10-12 over LAN) and with `--fake`. The scope plug is the package
   `rigol-dho-openhtf`, extra `station`, pinned in `[tool.uv.sources]`. Facts: `SPEC-station.md`.
+- **Levels into a real 50 ohm load (V1, 2026-10-12)**: the scope reads what `BSWV?` shows at `LOAD,50`, half
+  of `AMP` at `LOAD,HZ`, and `LOAD,75` follows the same source model. Facts: README.
 - **Modulation, sweep, burst** (`MDWV`, `SWWV`, `BTWV` groups): verified by read-back on the generator
   (2026-10-05) and **at the output with the scope (V2, 2026-10-12)**: AM depth, FM deviation, sweep range and
   period, burst cycle count and period all match the settings. Facts: README "Measured at the output:
@@ -24,10 +26,9 @@ reached over VXI-11 from there (the scope on LAN too, no USB passthrough needed)
 1. `uv sync --all-extras --dev && uv run pytest -q && uv run mypy`.
 2. Addresses: the git-ignored `HANDOFF.md` has the generator's and the scope's address and the wiring when it
    exists on this machine; otherwise ask the human. Identify each address with one `*IDN?` first.
-3. Next task by default: **V1** (below). It needs the human to fit the 50 ohm feed-through terminator at the
-   scope input and to remove it afterwards.
-4. Then `SPEC-arb.md` or `SPEC-counter-sync.md` (placeholders): recon on the generator first, then the
-   spec, then a coder, then acceptance. The owner picks.
+3. Next: `SPEC-arb.md` or `SPEC-counter-sync.md` (placeholders): recon on the generator first, then the spec,
+   then a coder, then acceptance. The owner picks. Both need only the generator; the scope is useful for
+   acceptance (arb shape at the output, sync pulse).
 
 How a feature gets done here (it worked three times on 2026-10-05): recon on the instrument with a script
 that logs every command and reply; the sanitized log becomes a transcript in `tests/data/` that the fake
@@ -64,7 +65,7 @@ ends with `tearDown()` on both. Keep the open-circuit peak under 5 V at the scop
 | STOP | First hardware session: `tools/probe.py` and `example_test.py` on the SDG2042X, from a local session on the LAN | done 2026-10-05 |
 | T6 | `SPEC-hardware-1.md`: hardware findings into the fake, validator, tolerances, README | done, accepted on hardware |
 | T7 | `SPEC-station.md` → `examples/station_demo.py` with rigol-dho-openhtf | done, accepted on both instruments 2026-10-05 |
-| V1 | Hardware check: signal levels with `LOAD,50` and a real 50 ohm load at the output (a feed-through terminator at the scope input). Expect the scope to read what `BSWV?` shows. The agent must ask the human to fit the terminator first, and to remove it afterwards. | **next**, needs the human to fit the terminator |
+| V1 | Hardware check: signal levels with `LOAD,50` and a real 50 ohm load at the output (a feed-through terminator at the scope input). | done 2026-10-12: the scope reads what `BSWV?` shows at `LOAD,50`; facts in README |
 | T8 | `SPEC-modulation.md`: `MDWV`, `SWWV`, `BTWV` as setup groups, fake, tests | done; read-back accepted on the generator 2026-10-05, signal not measured |
 | V2 | Hardware check: modulation, sweep and burst at the output with the scope (AM depth, sweep range, burst cycle count). | done 2026-10-12, facts in README and `SPEC-modulation.md` addendum 4 |
 | later | SPEC-arb, SPEC-counter-sync | each needs a hardware session |
@@ -101,7 +102,8 @@ fixed, the manager is no longer closed.
 ## Open questions
 
 - Not modelled or not measured (README "Things the manual does not tell you", the addenda of
-  `SPEC-hardware-1.md` and `SPEC-modulation.md`): the load rescale for loads other than 50 ohm, the PULSE
+  `SPEC-hardware-1.md` and `SPEC-modulation.md`): the sub-millivolt rounding of the display rescale for loads
+  other than 50 ohm (the source model itself held at 75 ohm on 2026-10-12), the PULSE
   width limit with long edges, the level window above 20 MHz at a numeric load, the minimum burst delay,
   the PWM deviation limit, SDG2082X/SDG2122X limits, USB on the generator.
 - Is the raw socket on port 5025 switched off by a setting or missing in firmware 2.01.01.23R7?
