@@ -3,7 +3,7 @@
 Handoff state for whoever picks this up next, human or agent. Keep it current; it is committed.
 Secrets (real IP, serial number, probe dumps) never go here; they live in the git-ignored `HANDOFF.md`.
 
-## Where we are (2026-10-12)
+## Where we are (2026-10-12, end of day)
 
 `main` holds everything. Work now runs from an LXC container on the instruments' LAN; both instruments are
 reached over VXI-11 from there (the scope on LAN too, no USB passthrough needed). Done so far:
@@ -25,14 +25,23 @@ reached over VXI-11 from there (the scope on LAN too, no USB passthrough needed)
   the selected wave does not change the output until it is selected again). Three transcripts in `tests/data/`.
 - 798 tests, `mypy --strict` clean. Branch `v2-signal` holds today's work; CI runs on push.
 
-## Start here
+## Start here (handoff written 2026-10-12, end of day)
 
-1. `uv sync --all-extras --dev && uv run pytest -q && uv run mypy`.
-2. Addresses: the git-ignored `HANDOFF.md` has the generator's and the scope's address and the wiring when it
-   exists on this machine; otherwise ask the human. Identify each address with one `*IDN?` first.
-3. Next: `SPEC-counter-sync.md` (placeholder): recon on the generator first, then the spec, then a coder, then
-   acceptance (the sync pulse can be checked on the scope). Also open: the sweep re-centring question at the end of
-   `SPEC-arb.md`, one short experiment.
+1. **Merge first.** Branch `v2-signal` (8 commits: V2, V1, the owner-role rule, arb spec, arb implementation, arb
+   acceptance, STATUS) is pushed and has no pull request yet (`gh` is not installed in the container; open it on
+   GitHub or merge locally). `main` is still at the 2026-10-05 handoff. Check CI on the branch before merging.
+2. `uv sync --all-extras --dev && uv run pytest -q && uv run mypy` (expect 798 passed, mypy clean).
+3. Addresses and the state of both instruments are in the git-ignored `HANDOFF.md` on this machine (the generator
+   and the scope are both on the container's LAN over VXI-11); otherwise ask the human. One `*IDN?` per address first.
+4. Roles (AGENTS.md): the session agent is the project owner. Briefs go to cheaper subagents (Sonnet for scripts and
+   implementation, Haiku for mechanical text work); the owner reviews, runs hardware, writes facts, commits.
+5. Next task by default: **`SPEC-counter-sync.md`** (placeholder): recon script by a coder from a brief (pattern:
+   `dumps/arb_recon*.py`, logged transcript, dry-run mode, every command from PG02 §3.22 FCNT, §3.10 SYNC, §3.11
+   EQPHASE, §3.8 PACP), the owner runs it, sanitize (Haiku), spec, coder, acceptance with the scope (sync pulse).
+   Before it, one short sweep experiment settles the open question at the end of `SPEC-arb.md`.
+6. Things to tell the human when they are at the bench: the generator holds 11 `htf_*` user waves (one of 16 MB)
+   that only the front panel deletes; the 50 ohm terminator was removed after V1 (confirm the normal wiring, CH1 to
+   CH1, no terminator, before any scope check).
 
 How a feature gets done here (it worked three times on 2026-10-05): recon on the instrument with a script
 that logs every command and reply; the sanitized log becomes a transcript in `tests/data/` that the fake
