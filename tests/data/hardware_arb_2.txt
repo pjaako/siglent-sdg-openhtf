@@ -1,0 +1,265 @@
+# Transcript of the arb recon B: SDG2042X, firmware 2.01.01.23R7, VXI-11, 2026-10-12, outputs off except A9.
+# '-> x' was sent, '<- y' is the reply to the query on the line above. Replies are verbatim.
+# '#! ' marks an exchange that is neither sent to nor compared with the fake (binary payloads shown as <N bytes sha1=.. first=..>, and STL? USER orders the fake does not model).
+# '## ' lines are section titles, '# ' lines are notes. Do not edit: this file is the oracle for tests/test_hardware_arb.py.
+
+## B0 identify, reset, ARB
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+-> *RST
+-> STL? USER
+#! <- STL WVNM,htf_test2,htf_test
+-> C1:BSWV WVTP,ARB
+-> C1:ARWV?
+<- C1:ARWV INDEX,0,NAME,StairUp
+
+## B1 header-less upload
+#! -> C1:WVDT WVNM,htf_b1,WAVEDATA,<128 bytes sha1=a1d09e6032bd first=ff7fff7fff7fff7fff7fff7fff7fff7f>
+-> C1:ARWV?
+<- C1:ARWV INDEX,0,NAME,StairUp
+-> STL? USER
+#! <- STL WVNM,htf_test2,htf_b1,htf_test
+-> C1:BSWV FRQ,5000
+-> C1:BSWV AMP,3
+-> C1:ARWV NAME,htf_b1
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b1.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,5000HZ,PERI,0.0002S,AMP,3V,OFST,0V,HLEV,1.5V,LLEV,-1.5V,PHSE,0
+#! -> WVDT? USER,htf_b1
+#! <- WVDT POS, /Local, WVNM, htf_b1, LENGTH, 128B, TYPE, 6, WAVEDATA,<129 bytes sha1=94b1048c0581 first=ff7fff7fff7fff7fff7fff7fff7fff7f>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# B1 htf_b1: equal=False sent_len=128 got_len=129
+
+## B2 explicit LENGTH, some header fields
+#! -> C1:WVDT WVNM,htf_b2,LENGTH,128B,FREQ,250,WAVEDATA,<128 bytes sha1=a1d09e6032bd first=ff7fff7fff7fff7fff7fff7fff7fff7f>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b1.bin
+-> STL? USER
+#! <- STL WVNM,htf_test2,htf_b1,htf_b2,htf_test
+-> C1:ARWV NAME,htf_b2
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b2.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,250HZ,PERI,0.004S,AMP,3V,OFST,0V,HLEV,1.5V,LLEV,-1.5V,PHSE,0
+#! -> WVDT? USER,htf_b2
+#! <- WVDT POS, /Local, WVNM, htf_b2, LENGTH, 128B, TYPE, 6, WAVEDATA,<129 bytes sha1=94b1048c0581 first=ff7fff7fff7fff7fff7fff7fff7fff7f>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# B2 htf_b2: equal=False sent_len=128 got_len=129
+
+## B3 odd byte count
+#! -> C1:WVDT WVNM,htf_b3,WAVEDATA,<5 bytes sha1=c168ee03c12d first=ff7fff7fff>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b2.bin
+-> STL? USER
+#! <- STL WVNM,htf_test2,htf_b1,htf_b2,htf_b3,htf_test
+-> C1:ARWV NAME,htf_b3
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b3.bin
+#! -> WVDT? USER,htf_b3
+#! <- WVDT POS, /Local, WVNM, htf_b3, LENGTH, 6B, TYPE, 6, WAVEDATA,<7 bytes sha1=99970c3b46f8 first=ff7fff7fff0a0a>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# B3 bytes read back: ff7fff7fff0a0a
+
+## B4 names
+#! -> C1:WVDT WVNM,HTF_B1,WAVEDATA,<128 bytes sha1=a1d09e6032bd first=ff7fff7fff7fff7fff7fff7fff7fff7f>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b3.bin
+-> STL? USER
+#! <- STL WVNM,htf_test2,htf_b1,htf_b2,htf_b3,HTF_B1,htf_test
+-> C1:ARWV NAME,HTF_B1
+-> C1:ARWV?
+<- C1:ARWV NAME,HTF_B1.bin
+-> C1:ARWV NAME,htf_b1
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b1.bin
+-> C1:ARWV NAME,htf_b1.bin
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b1.bin
+#! -> C1:WVDT WVNM,htf_b4_0123456789012345678901234567,WAVEDATA,<128 bytes sha1=a1d09e6032bd first=ff7fff7fff7fff7fff7fff7fff7fff7f>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b1.bin
+-> STL? USER
+#! <- STL WVNM,htf_b4_0123456789012345678901234567,htf_test2,htf_b1,htf_b2,htf_b3,HTF_B1,htf_test
+-> C1:ARWV NAME,htf_b4_0123456789012345678901234567
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b4_0123456789012345678901234567.bin
+#! -> C1:WVDT WVNM,"htf b5-x",WAVEDATA,<128 bytes sha1=a1d09e6032bd first=ff7fff7fff7fff7fff7fff7fff7fff7f>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b4_0123456789012345678901234567.bin
+-> STL? USER
+#! <- STL WVNM,htf_b4_0123456789012345678901234567,"htfb5-x",htf_test2,htf_b1,htf_b2,htf_b3,HTF_B1,htf_test
+-> C1:ARWV NAME,"htf b5-x"
+-> C1:ARWV?
+<- C1:ARWV NAME,"htfb5-x".bin
+
+## B5 live update of the selected wave
+-> C1:ARWV NAME,htf_b1
+-> C1:BSWV FRQ,1000
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b1.bin
+#! -> C1:WVDT WVNM,htf_b1,WAVEDATA,<128 bytes sha1=54f24a89b4ac first=008000880090009800a000a800b000b8>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b1.bin
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b1.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,3V,OFST,0V,HLEV,1.5V,LLEV,-1.5V,PHSE,0
+#! -> WVDT? USER,htf_b1
+#! <- WVDT POS, /Local, WVNM, htf_b1, LENGTH, 128B, TYPE, 6, WAVEDATA,<129 bytes sha1=daab22d76dbc first=008000880090009800a000a800b000b8>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# B5 htf_b1 triangle: equal=False sent_len=128 got_len=129
+
+## B6 large uploads
+#! -> C1:WVDT WVNM,htf_big,FREQ,1000,AMPL,2,OFST,0,PHASE,0,WAVEDATA,<200000 bytes sha1=b3a4d327e6c7 first=000002000400060008000a000c000e00>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b1.bin
+-> STL? USER
+#! <- STL WVNM,htf_b4_0123456789012345678901234567,"htfb5-x",htf_test2,htf_big,htf_b1,htf_b2,htf_b3,HTF_B1,htf_test
+-> C1:ARWV NAME,htf_big
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_big.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C1:SRATE MODE,DDS
+#! -> WVDT? USER,htf_big
+#! <- WVDT POS, /Local, WVNM, htf_big, LENGTH, 200000B, TYPE, 6, WAVEDATA,<200001 bytes sha1=dd1f6ee51f4d first=000002000400060008000a000c000e00>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# B6 N=100000: equal=False sent_len=200000 got_len=200001
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+#! -> C1:WVDT WVNM,htf_big,FREQ,1000,AMPL,2,OFST,0,PHASE,0,WAVEDATA,<2000000 bytes sha1=8a898bd28da1 first=00000000000001000100010001000100>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_big.bin
+-> STL? USER
+#! <- STL WVNM,htf_b4_0123456789012345678901234567,"htfb5-x",htf_test2,htf_big,htf_b1,htf_b2,htf_b3,HTF_B1,htf_test
+-> C1:ARWV NAME,htf_big
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_big.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C1:SRATE MODE,DDS
+#! -> WVDT? USER,htf_big
+#! <- WVDT POS, /Local, WVNM, htf_big, LENGTH, 2000000B, TYPE, 6, WAVEDATA,<2000001 bytes sha1=f508776dc836 first=00000000000001000100010001000100>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# B6 N=1000000: equal=False sent_len=2000000 got_len=2000001
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+#! -> C1:WVDT WVNM,htf_big,FREQ,1000,AMPL,2,OFST,0,PHASE,0,WAVEDATA,<16000000 bytes sha1=d34409a5e5a9 first=00000000000000000000000000000000>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_big.bin
+-> STL? USER
+#! <- STL WVNM,htf_b4_0123456789012345678901234567,"htfb5-x",htf_test2,htf_big,htf_b1,htf_b2,htf_b3,HTF_B1,htf_test
+-> C1:ARWV NAME,htf_big
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_big.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C1:SRATE MODE,DDS
+#! -> WVDT? USER,htf_big
+#! <- WVDT POS, /Local, WVNM, htf_big, LENGTH, 16000000B, TYPE, 6, WAVEDATA,<16000001 bytes sha1=cab60b969bd9 first=00000000000000000000000000000000>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# B6 N=8000000: equal=False sent_len=16000000 got_len=16000001
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+
+## B7 point counts
+#! -> C1:WVDT WVNM,htf_b7,FREQ,1000,AMPL,2,OFST,0,PHASE,0,WAVEDATA,<6 bytes sha1=8d5a3aab4d8d first=0000d96e2791>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_big.bin
+-> C1:ARWV NAME,htf_b7
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b7.bin
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,5461333.333HZ,PERI,1.83105e-07S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+-> C1:SRATE MODE,DDS
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,5461333.333HZ,PERI,1.83105e-07S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+#! -> C1:WVDT WVNM,htf_b7,FREQ,1000,AMPL,2,OFST,0,PHASE,0,WAVEDATA,<2000 bytes sha1=8efd13f13f97 first=0000ce009c016a0237030504d304a105>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b7.bin
+-> C1:ARWV NAME,htf_b7
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b7.bin
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,16384HZ,PERI,6.10352e-05S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+-> C1:SRATE MODE,DDS
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,16384HZ,PERI,6.10352e-05S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+#! -> C1:WVDT WVNM,htf_b7,FREQ,1000,AMPL,2,OFST,0,PHASE,0,WAVEDATA,<32770 bytes sha1=6413dc2a874a first=00000d001900260032003f004b005800>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b7.bin
+-> C1:ARWV NAME,htf_b7
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b7.bin
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,999.9389686HZ,PERI,0.00100006S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+-> C1:SRATE MODE,DDS
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,999.9389686HZ,PERI,0.00100006S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+
+## B8 the second channel
+-> C2:ARWV NAME,htf_b1
+-> C2:ARWV?
+<- C2:ARWV NAME,htf_b1.bin
+-> C2:BSWV?
+<- C2:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+#! -> C2:WVDT WVNM,htf_c2,WAVEDATA,<128 bytes sha1=a1d09e6032bd first=ff7fff7fff7fff7fff7fff7fff7fff7f>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_b7.bin
+-> STL? USER
+#! <- STL WVNM,htf_b4_0123456789012345678901234567,"htfb5-x",htf_test2,htf_big,htf_b1,htf_b2,htf_b3,htf_b7,htf_c2,HTF_B1,htf_test
+-> C1:ARWV NAME,htf_c2
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_c2.bin
+
+## B9 nonexistent wave, reset
+#! -> WVDT? USER,htf_nonexistent
+#! <- <0 bytes sha1=da39a3ee5e6b first=>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# B9 header='' data_len=0
+-> *RST
+-> STL? USER
+#! <- STL WVNM,htf_b4_0123456789012345678901234567,"htfb5-x",htf_test2,htf_big,htf_b1,htf_b2,htf_b3,htf_b7,htf_c2,HTF_B1,htf_test
+-> C1:ARWV?
+<- C1:ARWV INDEX,0,NAME,StairUp
+
+## cleanup
+-> C1:OUTP OFF
+-> C2:OUTP OFF
+-> C1:OUTP?
+<- C1:OUTP OFF,LOAD,HZ,PLRT,NOR
+-> C2:OUTP?
+<- C2:OUTP OFF,LOAD,HZ,PLRT,NOR

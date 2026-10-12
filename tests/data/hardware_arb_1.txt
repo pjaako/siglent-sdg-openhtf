@@ -1,0 +1,252 @@
+# Transcript of the arb recon A: SDG2042X, firmware 2.01.01.23R7, VXI-11, 2026-10-12, outputs off except A9.
+# '-> x' was sent, '<- y' is the reply to the query on the line above. Replies are verbatim.
+# '#! ' marks an exchange that is neither sent to nor compared with the fake (binary payloads shown as <N bytes sha1=.. first=..>, and STL? USER orders the fake does not model).
+# '## ' lines are section titles, '# ' lines are notes. Do not edit: this file is the oracle for tests/test_hardware_arb.py.
+
+## A0 identify, reset, defaults
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+-> *RST
+-> C1:ARWV?
+<- C1:ARWV INDEX,0,NAME,StairUp
+-> C2:ARWV?
+<- C2:ARWV INDEX,0,NAME,StairUp
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C2:SRATE?
+<- C2:SRATE MODE,DDS
+-> C1:BSWV?
+<- C1:BSWV WVTP,SINE,FRQ,1000HZ,PERI,0.001S,AMP,4V,AMPVRMS,1.414Vrms,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+
+## A1 STL
+-> STL?
+<- STL M0, StairUp, M1, StairDn, M10, LogFall, M100, LFPulse, M101, Tens1, M102, Tens2, M103, Tens3, M104, Airy, M105, Besselj, M106, Bessely, M107, Dirichlet, M108, Erf, M109, Erfc, M11, LogRise, M110, ErfcInv, M111, ErfInv, M112, Laguerre, M113, Legend, M114, Versiera, M115, Weibull, M116, LogNormal, M117, Laplace, M118, Maxwell, M119, Rayleigh, M12, Sqrt, M120, Cauchy, M121, CosH, M122, CosInt, M123, CotH, M124, CscH, M125, SecH, M126, SinH, M127, SinInt, M128, TanH, M129, ACosH, M13, Root3, M130, ASecH, M131, ASinH, M132, ATanH, M133, ACsch, M134, ACoth, M135, Bartlett, M136, BohmanWin, M137, ChebWin, M138, FlattopWin, M139, ParzenWin, M14, X^2, M140, TaylorWin, M141, TukeyWin, M142, SquareDuty01, M143, SquareDuty02, M144, SquareDuty04, M145, SquareDuty06, M146, SquareDuty08, M147, SquareDuty10, M148, SquareDuty12, M149, SquareDuty14, M15, X^3, M150, SquareDuty16, M151, SquareDuty18, M152, SquareDuty20, M153, SquareDuty22, M154, SquareDuty24, M155, SquareDuty26, M156, SquareDuty28, M157, SquareDuty30, M158, SquareDuty32, M159, SquareDuty34, M16, Sinc, M160, SquareDuty36, M161, SquareDuty38, M162, SquareDuty40, M163, SquareDuty42, M164, SquareDuty44, M165, SquareDuty46, M166, SquareDuty48, M167, SquareDuty50, M168, SquareDuty52, M169, SquareDuty54, M17, Gussian, M170, SquareDuty56, M171, SquareDuty58, M172, SquareDuty60, M173, SquareDuty62, M174, SquareDuty64, M175, SquareDuty66, M176, SquareDuty68, M177, SquareDuty70, M178, SquareDuty72, M179, SquareDuty74, M18, Dlorentz, M180, SquareDuty76, M181, SquareDuty78, M182, SquareDuty80, M183, SquareDuty82, M184, SquareDuty84, M185, SquareDuty86, M186, SquareDuty88, M187, SquareDuty90, M188, SquareDuty92, M189, SquareDuty94, M19, Haversine, M190, SquareDuty96, M191, SquareDuty98, M192, SquareDuty99, M193, demo1_375pts, M194, demo1_16kpts, M195, demo2_3kpts, M196, demo2_16kpts, M2, StairUD, M20, Lorentz, M21, Gauspuls, M22, Gmonopuls, M23, Tripuls, M24, Cardiac, M25, Quake, M26, Chirp, M27, Twotone, M28, SNR, M29, Hamming, M3, Ppulse, M30, Hanning, M31, kaiser, M32, Blackman, M33, Gausswin, M34, Triangle, M35, Bartlett-Hann, M36, Bartlett, M37, Tan, M38, Cot, M39, Sec, M4, Npulse, M40, Csc, M41, Asin, M42, Acos, M43, Atan, M44, Acot, M45, Square, M46, SineTra, M47, SineVer, M48, AmpALT, M49, AttALT, M5, Trapezia, M50, RoundHalf, M51, RoundsPM, M52, BlaseiWave, M53, DampedOsc, M54, SwingOsc, M55, Discharge, M56, Pahcur, M57, Combin, M58, SCR, M59, Butterworth, M6, Upramp, M60, Chebyshev1, M61, Chebyshev2, M62, TV, M63, Voice, M64, Surge, M65, Radar, M66, Ripple, M67, Gamma, M68, StepResp, M69, BandLimited, M7, Dnramp, M70, CPulse, M71, CWPulse, M72, GateVibr, M73, LFMPulse, M74, MCNoise, M75, AM, M76, FM, M77, PFM, M78, PM, M79, PWM, M8, ExpFal, M80, EOG, M81, EEG, M82, EMG, M83, Pulseilogram, M84, ResSpeed, M85, ECG1, M86, ECG2, M87, ECG3, M88, ECG4, M89, ECG5, M9, ExpRise, M90, ECG6, M91, ECG7, M92, ECG8, M93, ECG9, M94, ECG10, M95, ECG11, M96, ECG12, M97, ECG13, M98, ECG14, M99, ECG15
+-> STL? BUILDIN
+<- STL M0, StairUp, M1, StairDn, M10, LogFall, M100, LFPulse, M101, Tens1, M102, Tens2, M103, Tens3, M104, Airy, M105, Besselj, M106, Bessely, M107, Dirichlet, M108, Erf, M109, Erfc, M11, LogRise, M110, ErfcInv, M111, ErfInv, M112, Laguerre, M113, Legend, M114, Versiera, M115, Weibull, M116, LogNormal, M117, Laplace, M118, Maxwell, M119, Rayleigh, M12, Sqrt, M120, Cauchy, M121, CosH, M122, CosInt, M123, CotH, M124, CscH, M125, SecH, M126, SinH, M127, SinInt, M128, TanH, M129, ACosH, M13, Root3, M130, ASecH, M131, ASinH, M132, ATanH, M133, ACsch, M134, ACoth, M135, Bartlett, M136, BohmanWin, M137, ChebWin, M138, FlattopWin, M139, ParzenWin, M14, X^2, M140, TaylorWin, M141, TukeyWin, M142, SquareDuty01, M143, SquareDuty02, M144, SquareDuty04, M145, SquareDuty06, M146, SquareDuty08, M147, SquareDuty10, M148, SquareDuty12, M149, SquareDuty14, M15, X^3, M150, SquareDuty16, M151, SquareDuty18, M152, SquareDuty20, M153, SquareDuty22, M154, SquareDuty24, M155, SquareDuty26, M156, SquareDuty28, M157, SquareDuty30, M158, SquareDuty32, M159, SquareDuty34, M16, Sinc, M160, SquareDuty36, M161, SquareDuty38, M162, SquareDuty40, M163, SquareDuty42, M164, SquareDuty44, M165, SquareDuty46, M166, SquareDuty48, M167, SquareDuty50, M168, SquareDuty52, M169, SquareDuty54, M17, Gussian, M170, SquareDuty56, M171, SquareDuty58, M172, SquareDuty60, M173, SquareDuty62, M174, SquareDuty64, M175, SquareDuty66, M176, SquareDuty68, M177, SquareDuty70, M178, SquareDuty72, M179, SquareDuty74, M18, Dlorentz, M180, SquareDuty76, M181, SquareDuty78, M182, SquareDuty80, M183, SquareDuty82, M184, SquareDuty84, M185, SquareDuty86, M186, SquareDuty88, M187, SquareDuty90, M188, SquareDuty92, M189, SquareDuty94, M19, Haversine, M190, SquareDuty96, M191, SquareDuty98, M192, SquareDuty99, M193, demo1_375pts, M194, demo1_16kpts, M195, demo2_3kpts, M196, demo2_16kpts, M2, StairUD, M20, Lorentz, M21, Gauspuls, M22, Gmonopuls, M23, Tripuls, M24, Cardiac, M25, Quake, M26, Chirp, M27, Twotone, M28, SNR, M29, Hamming, M3, Ppulse, M30, Hanning, M31, kaiser, M32, Blackman, M33, Gausswin, M34, Triangle, M35, Bartlett-Hann, M36, Bartlett, M37, Tan, M38, Cot, M39, Sec, M4, Npulse, M40, Csc, M41, Asin, M42, Acos, M43, Atan, M44, Acot, M45, Square, M46, SineTra, M47, SineVer, M48, AmpALT, M49, AttALT, M5, Trapezia, M50, RoundHalf, M51, RoundsPM, M52, BlaseiWave, M53, DampedOsc, M54, SwingOsc, M55, Discharge, M56, Pahcur, M57, Combin, M58, SCR, M59, Butterworth, M6, Upramp, M60, Chebyshev1, M61, Chebyshev2, M62, TV, M63, Voice, M64, Surge, M65, Radar, M66, Ripple, M67, Gamma, M68, StepResp, M69, BandLimited, M7, Dnramp, M70, CPulse, M71, CWPulse, M72, GateVibr, M73, LFMPulse, M74, MCNoise, M75, AM, M76, FM, M77, PFM, M78, PM, M79, PWM, M8, ExpFal, M80, EOG, M81, EEG, M82, EMG, M83, Pulseilogram, M84, ResSpeed, M85, ECG1, M86, ECG2, M87, ECG3, M88, ECG4, M89, ECG5, M9, ExpRise, M90, ECG6, M91, ECG7, M92, ECG8, M93, ECG9, M94, ECG10, M95, ECG11, M96, ECG12, M97, ECG13, M98, ECG14, M99, ECG15
+-> STL? USER
+<- STL WVNM
+
+## A2 ARWV selection
+-> C1:BSWV WVTP,ARB
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:ARWV?
+<- C1:ARWV INDEX,0,NAME,StairUp
+-> C1:ARWV INDEX,2
+-> C1:ARWV?
+<- C1:ARWV INDEX,2,NAME,StairUD
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:ARWV INDEX,0
+-> C1:ARWV?
+<- C1:ARWV INDEX,0,NAME,StairUp
+-> C1:ARWV INDEX,1
+-> C1:ARWV?
+<- C1:ARWV INDEX,1,NAME,StairDn
+-> C1:ARWV INDEX,198
+-> C1:ARWV?
+<- C1:ARWV INDEX,1,NAME,StairDn
+-> C1:ARWV INDEX,199
+-> C1:ARWV?
+<- C1:ARWV INDEX,1,NAME,StairDn
+-> C1:ARWV INDEX,18
+-> C1:ARWV?
+<- C1:ARWV INDEX,18,NAME,Dlorentz
+-> C1:ARWV NAME,StairDn
+-> C1:ARWV?
+<- C1:ARWV INDEX,18,NAME,Dlorentz
+-> C1:ARWV NAME,"StairUp"
+-> C1:ARWV?
+<- C1:ARWV INDEX,18,NAME,Dlorentz
+-> C1:ARWV NAME,sinc
+-> C1:ARWV?
+<- C1:ARWV INDEX,18,NAME,Dlorentz
+-> C1:BSWV WVTP,SINE
+-> C1:ARWV INDEX,3
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:ARWV?
+<- C1:ARWV INDEX,3,NAME,Ppulse
+-> C2:ARWV INDEX,5
+-> C2:ARWV?
+<- C2:ARWV INDEX,5,NAME,Trapezia
+-> C2:BSWV?
+<- C2:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:ARWV?
+<- C1:ARWV INDEX,3,NAME,Ppulse
+
+## A3 WVDT? of built-in waveforms
+#! -> WVDT? M2
+#! <- WVDT POS, M2, WVNM, StairUD, LENGTH, 32768B, TYPE, 6, WAVEDATA,<32769 bytes sha1=a27609f8b822 first=ff7fff7fff7fff7fff7fff7fff7fff7f>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# WVDT? M2: n=16384 min=-32768 max=32767 first8=[32767, 32767, 32767, 32767, 32767, 32767, 32767, 32767] last4=[32767, 32767, 32767, 32767]
+#! -> WVDT? M18
+#! <- WVDT POS, M18, WVNM, Dlorentz, LENGTH, 32768B, TYPE, 6, WAVEDATA,<32769 bytes sha1=7ec0db40fd40 first=62006200620063006300630063006300>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# WVDT? M18: n=16384 min=-32768 max=32767 first8=[98, 98, 98, 99, 99, 99, 99, 99] last4=[-100, -100, -99, -99]
+
+## A4 SRATE
+-> C1:BSWV WVTP,ARB
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:SRATE VALUE,1000000
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,1000000Sa/s
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,61.03515625HZ,PERI,0.016384S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:SRATE VALUE,1E9
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,75000000Sa/s
+-> C1:SRATE VALUE,0.1
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,0.1Sa/s
+-> C1:SRATE VALUE,12345.678
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,12345.678Sa/s
+-> C1:SRATE MODE,DDS
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,0.7535203857HZ,PERI,1.3271S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:SRATE VALUE,2000000
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C1:SRATE MODE,TARB,VALUE,500000
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,500000Sa/s
+-> C1:BSWV FRQ,2000
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,2000HZ,PERI,0.0005S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,32768000Sa/s
+-> C1:SRATE MODE,DDS
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,2000HZ,PERI,0.0005S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:BSWV WVTP,SINE
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,32768000Sa/s
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,2000HZ,PERI,0.0005S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C1:SRATE MODE,DDS
+
+## A5 upload 16-point triangle
+-> C1:BSWV WVTP,ARB
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,2000HZ,PERI,0.0005S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+#! -> C1:WVDT WVNM,htf_test,FREQ,1000,AMPL,2,OFST,0,PHASE,0,WAVEDATA,<32 bytes sha1=9529eeed1656 first=008000a000c000e00000ff1fff3fff5f>
+-> C1:ARWV?
+<- C1:ARWV INDEX,3,NAME,Ppulse
+-> STL? USER
+<- STL WVNM,htf_test
+-> C1:ARWV NAME,htf_test
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,0
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+#! -> WVDT? USER,htf_test
+#! <- WVDT POS, /Local, WVNM, htf_test, LENGTH, 32B, TYPE, 6, WAVEDATA,<33 bytes sha1=3fdf78b2aadd first=008000a000c000e00000ff1fff3fff5f>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# A5 htf_test: equal=False sent_len=32 got_len=33
+# A5 first20 read back: [-32768, -24576, -16384, -8192, 0, 8191, 16383, 24575, 24575, 16383, 8191, 0, -8192, -16384, -24576, -32768]
+
+## A6 upload 4096-point ramp with 0x0A/0x0D bytes
+#! -> C1:WVDT WVNM,htf_test2,FREQ,2500,AMPL,1,OFST,0.5,PHASE,90,WAVEDATA,<8192 bytes sha1=ded8cd8c69fb first=00801080208030804080508060807080>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test.bin
+-> STL? USER
+#! <- STL WVNM,htf_test2,htf_test
+-> C1:ARWV NAME,htf_test2
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test2.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,2500HZ,PERI,0.0004S,AMP,1V,OFST,0.5V,HLEV,1V,LLEV,0V,PHSE,90
+#! -> WVDT? USER,htf_test2
+#! <- WVDT POS, /Local, WVNM, htf_test2, LENGTH, 8192B, TYPE, 6, WAVEDATA,<8193 bytes sha1=da494428cd0b first=00801080208030804080508060807080>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# A6 htf_test2: equal=False sent_len=8192 got_len=8193
+# A6 first differing byte offsets: []
+
+## A7 overwrite with 2 points
+#! -> C1:WVDT WVNM,htf_test,FREQ,100,AMPL,4,OFST,0,PHASE,0,WAVEDATA,<4 bytes sha1=a9b9bd4c3218 first=ff7f0080>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test2.bin
+-> STL? USER
+#! <- STL WVNM,htf_test2,htf_test
+-> C1:ARWV NAME,htf_test
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,100HZ,PERI,0.01S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+#! -> WVDT? USER,htf_test
+#! <- WVDT POS, /Local, WVNM, htf_test, LENGTH, 4B, TYPE, 6, WAVEDATA,<5 bytes sha1=1f05ba7f5098 first=ff7f00800a>
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+# A7 htf_test: equal=False sent_len=4 got_len=5
+# A7 bytes read back: ff7f00800a
+
+## A8 unknown name, reset
+-> C1:ARWV NAME,htf_nonexistent
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test.bin
+-> *RST
+-> C1:ARWV?
+<- C1:ARWV INDEX,0,NAME,StairUp
+-> C1:BSWV?
+<- C1:BSWV WVTP,SINE,FRQ,1000HZ,PERI,0.001S,AMP,4V,AMPVRMS,1.414Vrms,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> STL? USER
+#! <- STL WVNM,htf_test2,htf_test
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+
+## A9 output on the scope
+-> C1:BSWV WVTP,ARB
+-> C1:ARWV NAME,htf_test2
+-> C1:BSWV FRQ,1000
+-> C1:BSWV AMP,2
+-> C1:BSWV OFST,0
+-> C1:OUTP LOAD,HZ
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,90
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test2.bin
+-> C1:OUTP ON
+-> C1:OUTP?
+<- C1:OUTP ON,LOAD,HZ,PLRT,NOR
+# scope dds_1k: Vpp=2.025 Vmax=1.018 Vmin=-1.007 f_rep=999.52 Hz crossings=8 rising_fraction=0.485
+-> C1:SRATE MODE,TARB,VALUE,4096000
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,4096000Sa/s
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,90
+# scope tarb_4096k: Vpp=2.073 Vmax=1.038 Vmin=-1.035 f_rep=1853.5 Hz crossings=10 rising_fraction=0.485
+-> C1:SRATE VALUE,409600
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,409600Sa/s
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,100HZ,PERI,0.01S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,90
+# scope tarb_409k6: Vpp=1.657 Vmax=0.8118 Vmin=-0.8453 f_rep=nan Hz crossings=1 rising_fraction=0.481
+-> C1:SRATE MODE,DDS
+
+## cleanup
+-> C1:OUTP OFF
+-> C2:OUTP OFF
+-> C1:OUTP?
+<- C1:OUTP OFF,LOAD,HZ,PLRT,NOR
+-> C2:OUTP?
+<- C2:OUTP OFF,LOAD,HZ,PLRT,NOR
