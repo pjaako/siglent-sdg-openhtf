@@ -6,7 +6,9 @@ literal and key table below names its PG02 section. Nothing that PG02 does not d
 
 import math
 import re
-from collections.abc import Mapping
+import sys
+from array import array
+from collections.abc import Mapping, Sequence
 from typing import NamedTuple
 
 from .models import ModelLimits
@@ -15,7 +17,8 @@ Setup = Mapping[str, Mapping[str, Mapping[str, object]]]  # 'C1' -> 'BSWV'|'OUTP
 
 CHANNELS = ("C1", "C2")  # PG02 §3.3/§3.4 <channel>:={C1,C2}
 # PG02 §3.3 (OUTPut), §3.4 (BSWV), §3.5 (MDWV), §3.6.1 (SWWV), §3.7 (BTWV)
-GROUPS = ("OUTP", "BSWV", "MDWV", "SWWV", "BTWV")
+# PG02 §3.9.1 (ARWV) and §3.40 (SRATE) come after them
+GROUPS = ("OUTP", "BSWV", "MDWV", "SWWV", "BTWV", "ARWV", "SRATE")
 MOD_GROUPS = ("MDWV", "SWWV", "BTWV")  # at most one is on per channel (measured, modulation recon, README)
 
 # PG02 §3.4 WVTP; PRBS/IQ excluded: their parameters are "no" for SDG2000X in the §3.4 availability table
@@ -50,7 +53,48 @@ BTWV_KEYS = frozenset(
     {"STATE", "PRD", "STPS", "GATE_NCYC", "TRSR", "DLAY", "PLRT", "TRMD", "EDGE", "TIME", "COUNT"}
 )
 _MOD_KEYS: Mapping[str, frozenset[str]] = {"MDWV": MDWV_KEYS, "SWWV": SWWV_KEYS, "BTWV": BTWV_KEYS}
-_GROUP_SECTION = {"OUTP": "§3.3", "BSWV": "§3.4", "MDWV": "§3.5", "SWWV": "§3.6.1", "BTWV": "§3.7"}
+_GROUP_SECTION = {
+    "OUTP": "§3.3", "BSWV": "§3.4", "MDWV": "§3.5", "SWWV": "§3.6.1", "BTWV": "§3.7", "ARWV": "§3.9.1", "SRATE": "§3.40",
+}  # fmt: skip
+
+# PG02 §3.9.1 ARWV: select the arbitrary waveform by built-in INDEX or by (user) NAME; exactly one per setup
+ARWV_KEYS = frozenset({"INDEX", "NAME"})
+# PG02 §3.40 SRATE: MODE (DDS|TARB) and VALUE (Sa/s, TrueArb only). INTER is not available on the SDG2000X (§3.40 table).
+SRATE_KEYS = frozenset({"MODE", "VALUE"})
+SRATE_MODES = frozenset({"DDS", "TARB"})  # PG02 §3.40 <mode>
+# The built-in table of this unit, index = position. The unit's table is PG02 §3.9.1's table shifted by two (index 0 is
+# StairUp, not Sine); the names are the ``STL? BUILDIN`` reply (PG02 §3.31) of tests/data/hardware_arb_1.txt.
+# measured, arb recon A (README)
+BUILTIN_ARBS: tuple[str, ...] = (
+    "StairUp", "StairDn", "StairUD", "Ppulse", "Npulse", "Trapezia", "Upramp", "Dnramp", "ExpFal", "ExpRise",
+    "LogFall", "LogRise", "Sqrt", "Root3", "X^2", "X^3", "Sinc", "Gussian", "Dlorentz", "Haversine",
+    "Lorentz", "Gauspuls", "Gmonopuls", "Tripuls", "Cardiac", "Quake", "Chirp", "Twotone", "SNR", "Hamming",
+    "Hanning", "kaiser", "Blackman", "Gausswin", "Triangle", "Bartlett-Hann", "Bartlett", "Tan", "Cot", "Sec",
+    "Csc", "Asin", "Acos", "Atan", "Acot", "Square", "SineTra", "SineVer", "AmpALT", "AttALT", "RoundHalf",
+    "RoundsPM", "BlaseiWave", "DampedOsc", "SwingOsc", "Discharge", "Pahcur", "Combin", "SCR", "Butterworth",
+    "Chebyshev1", "Chebyshev2", "TV", "Voice", "Surge", "Radar", "Ripple", "Gamma", "StepResp", "BandLimited",
+    "CPulse", "CWPulse", "GateVibr", "LFMPulse", "MCNoise", "AM", "FM", "PFM", "PM", "PWM", "EOG", "EEG",
+    "EMG", "Pulseilogram", "ResSpeed", "ECG1", "ECG2", "ECG3", "ECG4", "ECG5", "ECG6", "ECG7", "ECG8", "ECG9",
+    "ECG10", "ECG11", "ECG12", "ECG13", "ECG14", "ECG15", "LFPulse", "Tens1", "Tens2", "Tens3", "Airy",
+    "Besselj", "Bessely", "Dirichlet", "Erf", "Erfc", "ErfcInv", "ErfInv", "Laguerre", "Legend", "Versiera",
+    "Weibull", "LogNormal", "Laplace", "Maxwell", "Rayleigh", "Cauchy", "CosH", "CosInt", "CotH", "CscH",
+    "SecH", "SinH", "SinInt", "TanH", "ACosH", "ASecH", "ASinH", "ATanH", "ACsch", "ACoth", "Bartlett",
+    "BohmanWin", "ChebWin", "FlattopWin", "ParzenWin", "TaylorWin", "TukeyWin", "SquareDuty01",
+    "SquareDuty02", "SquareDuty04", "SquareDuty06", "SquareDuty08", "SquareDuty10", "SquareDuty12",
+    "SquareDuty14", "SquareDuty16", "SquareDuty18", "SquareDuty20", "SquareDuty22", "SquareDuty24",
+    "SquareDuty26", "SquareDuty28", "SquareDuty30", "SquareDuty32", "SquareDuty34", "SquareDuty36",
+    "SquareDuty38", "SquareDuty40", "SquareDuty42", "SquareDuty44", "SquareDuty46", "SquareDuty48",
+    "SquareDuty50", "SquareDuty52", "SquareDuty54", "SquareDuty56", "SquareDuty58", "SquareDuty60",
+    "SquareDuty62", "SquareDuty64", "SquareDuty66", "SquareDuty68", "SquareDuty70", "SquareDuty72",
+    "SquareDuty74", "SquareDuty76", "SquareDuty78", "SquareDuty80", "SquareDuty82", "SquareDuty84",
+    "SquareDuty86", "SquareDuty88", "SquareDuty90", "SquareDuty92", "SquareDuty94", "SquareDuty96",
+    "SquareDuty98", "SquareDuty99", "demo1_375pts", "demo1_16kpts", "demo2_3kpts", "demo2_16kpts",
+)
+ARB_INDEX_MAX = len(BUILTIN_ARBS) - 1  # 196
+ARB_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,40}$")  # measured up to 40 characters (B3); the upper bound is a hypothesis
+SRATE_VALUE_MAX = 75e6  # Sa/s; VALUE,1E9 reads 75000000Sa/s (A11)   # measured, arb recon A (README)
+SRATE_VALUE_MIN = 0.0  # exclusive; 0.1 was accepted (A11), the lower bound is a hypothesis
+WVDT_MIN_BYTES, WVDT_MAX_BYTES = 4, 16_000_000  # 2 points accepted (A8); 8 000 000 points is the PG02 maximum (B5)
 # Which modulation types a MDWV key belongs to (PG02 §3.5 parameter table; measured reply shapes, README)
 _MDWV_KEY_TYPES: Mapping[str, frozenset[str]] = {
     "SRC": MDWV_TYPES,
@@ -255,6 +299,21 @@ def _build_swwv_btwv(channel: int, group: str, key: str, value: object) -> str:
     return f"{channel_name(channel)}:{group} {key},{text}"  # PG02 §3.6.1, §3.7
 
 
+def build_arwv(channel: int, key: str, value: object) -> str:
+    """``C1:ARWV INDEX,5``, ``C1:ARWV NAME,htf_test`` (PG02 §3.9.1 Format1, Format2; unquoted, measured, arb recon A)."""
+    if key not in ARWV_KEYS:
+        raise ValueError(f"unknown ARWV key {key!r}")
+    return f"{channel_name(channel)}:ARWV {key},{format_value(value)}"  # PG02 §3.9.1
+
+
+def build_srate(channel: int, key: str, value: object) -> str:
+    """``C1:SRATE MODE,TARB``, ``C1:SRATE VALUE,4096000`` (PG02 §3.40 examples); ``MODE`` is sent upper case."""
+    if key not in SRATE_KEYS:
+        raise ValueError(f"unknown SRATE key {key!r}")
+    text = format_value(value)
+    return f"{channel_name(channel)}:SRATE {key},{text.upper() if key == 'MODE' else text}"  # PG02 §3.40
+
+
 def build_command(channel: int, group: str, key: str, value: object, *, mdwv_type: str | None = None) -> str:
     """The write command for one ``(group, key, value)`` triple (PG02 §3.3 to §3.7).
 
@@ -270,6 +329,10 @@ def build_command(channel: int, group: str, key: str, value: object, *, mdwv_typ
         return build_mdwv(channel, mdwv_type or "", key, value)
     if group in ("SWWV", "BTWV"):
         return _build_swwv_btwv(channel, group, key, value)
+    if group == "ARWV":
+        return build_arwv(channel, key, value)
+    if group == "SRATE":
+        return build_srate(channel, key, value)
     raise ValueError(f"unknown group {group!r}; expected one of {list(GROUPS)}")
 
 
@@ -352,6 +415,11 @@ def typed_fields(reply: Reply) -> dict[str, float | str]:
 
 def values_match(key: str, sent: object, got: float | str) -> bool:
     """Compare a value we sent with the typed value read back (read-back is the arbiter, AGENTS.md)."""
+    if key == "NAME":
+        # ARWV NAME reads back with ".bin" appended and is case-sensitive   # measured, arb recon B (README, B3)
+        if not (isinstance(sent, str) and isinstance(got, str)):
+            return False
+        return got.removesuffix(".bin") == sent
     if isinstance(sent, bool):
         return isinstance(got, str) and got.strip().upper() == ("ON" if sent else "OFF")
     if isinstance(sent, str):
@@ -424,7 +492,7 @@ def validate_setup(setup: Setup, limits: ModelLimits | None) -> None:
                 raise ValueError(f"{channel}: unknown group {group!r}; expected one of {list(GROUPS)}")
             if not isinstance(params, Mapping):
                 raise ValueError(f"{_where(channel, group)}: expected a mapping of keys, got {type(params).__name__}")
-            allowed = {"OUTP": OUTP_KEYS, "BSWV": BSWV_KEYS, **_MOD_KEYS}[group]
+            allowed = {"OUTP": OUTP_KEYS, "BSWV": BSWV_KEYS, "ARWV": ARWV_KEYS, "SRATE": SRATE_KEYS, **_MOD_KEYS}[group]
             for key in params:
                 if key not in allowed:
                     raise ValueError(
@@ -442,8 +510,69 @@ def validate_setup(setup: Setup, limits: ModelLimits | None) -> None:
             for key, value in groups.get(group, {}).items():
                 _check_mod_value(_where(channel, group, key), group, key, value)
         _validate_mod_combination(channel, groups)
+        for group in ("ARWV", "SRATE"):
+            for key, value in groups.get(group, {}).items():
+                _check_arb_value(_where(channel, group, key), group, key, value)
+        _validate_arb_combination(channel, groups)
         if limits is not None:
             _validate_limits(channel, outp, bswv, limits)
+
+
+def _check_arb_name(where: str, name: object) -> str:
+    """The user wave name as the plug accepts it: ``[A-Za-z0-9_-]{1,40}``, no ``.bin`` (measured, arb recon B, B3)."""
+    if not isinstance(name, str):
+        raise ValueError(f"{where}: the wave name must be a string, got {name!r}")
+    if name.endswith(".bin"):
+        raise ValueError(f"{where}: {name!r} ends with '.bin'; give the name without it (the plug keeps names canonical)")
+    if ARB_NAME_PATTERN.match(name) is None:
+        raise ValueError(f"{where}: {name!r} does not match [A-Za-z0-9_-]{{1,40}}")
+    return name
+
+
+def _check_arb_value(where: str, group: str, key: str, value: object) -> None:
+    """Value type and range of one ARWV or SRATE key (PG02 §3.9.1, §3.40)."""
+    if group == "ARWV":
+        if key == "INDEX":
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= ARB_INDEX_MAX:
+                raise ValueError(f"{where}: must be an int in 0..{ARB_INDEX_MAX}, got {value!r}")  # PG02 §3.9.1
+        else:
+            _check_arb_name(where, value)
+    elif key == "MODE":
+        if not (isinstance(value, str) and value.upper() in SRATE_MODES):
+            raise ValueError(f"{where}: must be 'DDS' or 'TARB', got {value!r}")  # PG02 §3.40
+    else:
+        num = _number(value)
+        if num is None or not math.isfinite(num) or not SRATE_VALUE_MIN < num <= SRATE_VALUE_MAX:
+            raise ValueError(f"{where}: must be a number above 0 and up to {SRATE_VALUE_MAX:g} Sa/s, got {value!r}")
+
+
+def _validate_arb_combination(channel: str, groups: Mapping[str, Mapping[str, object]]) -> None:
+    """ARWV and SRATE need an ARB carrier in the same setup; one selector; VALUE only in TARB; one quantity with FRQ."""
+    bswv = groups.get("BSWV", {})
+    arwv = groups.get("ARWV")
+    srate = groups.get("SRATE")
+    if arwv is not None:
+        chosen = [k for k in ("INDEX", "NAME") if k in arwv]
+        if len(chosen) != 1:
+            raise ValueError(f"{_where(channel, 'ARWV')}: give exactly one of INDEX and NAME, got {sorted(arwv)}")
+    for group, params in (("ARWV", arwv), ("SRATE", srate)):
+        if params and bswv.get("WVTP") != "ARB":
+            # the generator would switch the type silently; the setup must say it   # measured, arb recon A (A4)
+            raise ValueError(f"{_where(channel, group)}: needs BSWV WVTP 'ARB' in the same channel setup")
+    if srate:
+        mode = srate.get("MODE")
+        tarb = isinstance(mode, str) and mode.upper() == "TARB"
+        if "VALUE" in srate:
+            if mode is None:
+                raise ValueError(f"{_where(channel, 'SRATE', 'VALUE')}: needs MODE in the same group (be explicit)")
+            if not tarb:
+                raise ValueError(f"{_where(channel, 'SRATE', 'VALUE')}: only valid with MODE 'TARB'")  # A10
+            for key in ("FRQ", "PERI"):
+                if key in bswv:
+                    raise ValueError(
+                        f"{_where(channel, 'BSWV', key)}: cannot be combined with SRATE VALUE; in TARB the "
+                        "frequency and the sample rate are one quantity"  # A11, B6
+                    )
 
 
 def _check_mod_value(where: str, group: str, key: str, value: object) -> None:
@@ -645,7 +774,8 @@ def _order_mod_group(group: str, params: Mapping[str, object]) -> list[tuple[str
 def order_setup(channel_setup: Mapping[str, Mapping[str, object]]) -> list[tuple[str, str, object]]:
     """``(group, key, value)`` triples in a safe write order for one channel.
 
-    1 OUTP STATE if off; 2 OUTP LOAD; 3 OUTP PLRT; 4 BSWV WVTP; 5 BSWV FRQ or PERI; 6 BSWV AMP/AMPVRMS/AMPDBM
+    1 OUTP STATE if off; 2 OUTP LOAD; 3 OUTP PLRT; 4 BSWV WVTP, then ARWV, SRATE MODE, SRATE VALUE (selecting an
+    arbitrary wave applies its stored parameters, so it precedes everything below); 5 BSWV FRQ or PERI; 6 BSWV AMP/AMPVRMS/AMPDBM
     then OFST, or HLEV then LLEV; 7 other BSWV keys in the caller's order; 8 OUTP STATE if on.
     LOAD precedes the amplitude because switching LOAD rescales the displayed levels (measured, hardware
     session 1, README).
@@ -661,7 +791,15 @@ def order_setup(channel_setup: Mapping[str, Mapping[str, object]]) -> list[tuple
         if key in outp:
             triples.append(("OUTP", key, outp[key]))
     bswv_order = ("WVTP", "FRQ", "PERI", *_AMPLITUDE_KEYS, "OFST", *_LEVEL_KEYS)  # PG02 §3.4
-    for key in bswv_order:
+    if "WVTP" in bswv:
+        triples.append(("BSWV", "WVTP", bswv["WVTP"]))
+    # The selection of an ARB applies the parameters stored with the file, so it precedes the carrier parameters;
+    # then the mode and the sample rate, which set the frequency   # measured, arb recon A (A5, A11)
+    arwv = channel_setup.get("ARWV", {})
+    srate = channel_setup.get("SRATE", {})
+    triples.extend(("ARWV", k, arwv[k]) for k in ("INDEX", "NAME") if k in arwv)
+    triples.extend(("SRATE", k, srate[k]) for k in ("MODE", "VALUE") if k in srate)
+    for key in bswv_order[1:]:
         if key in bswv:
             triples.append(("BSWV", key, bswv[key]))
     triples.extend(("BSWV", k, v) for k, v in bswv.items() if k not in bswv_order)
@@ -672,3 +810,115 @@ def order_setup(channel_setup: Mapping[str, Mapping[str, object]]) -> list[tuple
         triples.extend(_order_mod_group(group, channel_setup[group]))
     triples.extend(last)
     return triples
+
+
+# ------------------------------------------------------------------------------------------------------------
+# Arbitrary waveform data and lists (PG02 §3.31 STL, §3.32 WVDT). Pure functions, no numpy.
+# ------------------------------------------------------------------------------------------------------------
+
+
+def encode_samples(samples: bytes | Sequence[int]) -> bytes:
+    """Samples as the bytes ``WVDT`` wants: little-endian signed 16-bit (PG02 §3.32 example; measured, arb recon A, A6).
+
+    ``bytes`` pass through; a sequence of ints in -32768..32767 is packed. The result must have an even length (an
+    odd count corrupts the data, B2), at least 4 bytes (2 points, A8) and at most 16 000 000 bytes (8 000 000
+    points, the PG02 maximum, B5), else ``ValueError``.
+    """
+    if isinstance(samples, bytes | bytearray):
+        data = bytes(samples)
+    else:
+        values = list(samples)
+        for index, value in enumerate(values):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"sample {index} is not an int: {value!r}")
+        if values and (min(values) < -32768 or max(values) > 32767):
+            raise ValueError(f"samples must be in -32768..32767, got {min(values)}..{max(values)}")
+        packed = array("h", values)
+        if sys.byteorder == "big":
+            packed.byteswap()
+        data = packed.tobytes()
+    if len(data) % 2:
+        raise ValueError(f"odd byte count {len(data)}: the generator corrupts the data (a point is two bytes)")
+    if len(data) < WVDT_MIN_BYTES:
+        raise ValueError(f"{len(data)} bytes is too short: at least {WVDT_MIN_BYTES} bytes (2 points)")
+    if len(data) > WVDT_MAX_BYTES:
+        raise ValueError(f"{len(data)} bytes is too long: at most {WVDT_MAX_BYTES} bytes (8 000 000 points)")
+    return data
+
+
+def build_wvdt_header(
+    channel: int,
+    name: str,
+    *,
+    freq: float | None = None,
+    ampl: float | None = None,
+    ofst: float | None = None,
+    phase: float | None = None,
+) -> str:
+    """``C1:WVDT WVNM,<name>[,FREQ,<f>][,AMPL,<vpp>][,OFST,<v>][,PHASE,<deg>],WAVEDATA,`` (PG02 §3.32).
+
+    Only the parameters given are written; a header-less upload is accepted (measured, arb recon B, B1). The data
+    follows the header, then ``\\n``.
+    """
+    ch = channel_name(channel)
+    parts = [f"WVNM,{_check_arb_name(f'{ch} WVDT WVNM', name)}"]  # PG02 §3.32
+    for key, value in (("FREQ", freq), ("AMPL", ampl), ("OFST", ofst), ("PHASE", phase)):  # PG02 §3.32
+        if value is not None:
+            parts.append(f"{key},{format_value(value)}")
+    return f"{ch}:WVDT " + ",".join(parts) + ",WAVEDATA,"  # PG02 §3.32
+
+
+def parse_wvdt_reply(raw: bytes) -> tuple[dict[str, str | int], bytes]:
+    """Split a ``WVDT?`` reply into its header fields and the data (PG02 §3.32; layout measured, arb recon A, A8).
+
+    The reply is ``WVDT POS, /Local, WVNM, htf_b1, LENGTH, 128B, TYPE, 6, WAVEDATA,`` + ``LENGTH`` bytes + ``\\n``.
+    The keys ``POS``, ``WVNM``, ``LENGTH``, ``TYPE`` are kept as strings and ``'length'`` is the byte count as an
+    ``int``. An empty reply means the wave does not exist (B8).
+    """
+    if not raw:
+        raise ProtocolError("no such wave")  # measured, arb recon B (B8)
+    marker = b"WAVEDATA,"
+    cut = raw.find(marker)
+    if cut < 0:
+        raise ProtocolError(f"no WAVEDATA in the WVDT reply: {raw[:80]!r}")
+    head = raw[:cut].decode("ascii", errors="replace").strip()
+    tokens = [t.strip() for t in head.removeprefix("WVDT").split(",")]
+    fields: dict[str, str | int] = {}
+    for key, val in zip(tokens[0::2], tokens[1::2], strict=False):
+        fields[key] = val
+    length_text = fields.get("LENGTH")
+    if not isinstance(length_text, str) or re.fullmatch(r"\d+B", length_text) is None:
+        raise ProtocolError(f"no LENGTH in the WVDT reply header: {head!r}")
+    length = int(length_text[:-1])
+    fields["length"] = length
+    data = raw[cut + len(marker) :]
+    if data.endswith(b"\n"):
+        data = data[:-1]  # exactly one terminator
+    if len(data) != length:
+        raise ProtocolError(f"WVDT reply header says {length} bytes, got {len(data)}")
+    return fields, data
+
+
+def parse_stl(reply: str) -> list[str]:
+    """``STL WVNM`` -> ``[]``, ``STL WVNM,a,b`` -> ``['a', 'b']`` (PG02 §3.31 ``STL? USER``; measured, arb recon A, A7)."""
+    header, _, body = reply.strip().partition(" ")
+    tokens = [t.strip() for t in body.split(",")]
+    if header != "STL" or tokens[0] != "WVNM":
+        raise ProtocolError(f"expected 'STL WVNM,...', got {reply!r}")
+    return [t for t in tokens[1:] if t]
+
+
+def parse_stl_builtin(reply: str) -> dict[int, str]:
+    """``STL M0, StairUp, M1, StairDn, ...`` -> ``{0: 'StairUp', 1: 'StairDn', ...}`` (PG02 §3.31 ``STL? BUILDIN``)."""
+    header, _, body = reply.strip().partition(" ")
+    if header != "STL":
+        raise ProtocolError(f"expected 'STL M0, name, ...', got {reply!r}")
+    tokens = [t.strip() for t in body.split(",")]
+    if len(tokens) % 2:
+        raise ProtocolError(f"odd number of tokens in the STL reply: {reply[:80]!r}")
+    result: dict[int, str] = {}
+    for key, name in zip(tokens[0::2], tokens[1::2], strict=True):
+        if re.fullmatch(r"M\d+", key) is None:
+            raise ProtocolError(f"expected M<n> in the STL reply, got {key!r}")
+        result[int(key[1:])] = name
+    return result

@@ -37,7 +37,7 @@ def _mdwv(**params: Any) -> Setup:
 
 
 def test_groups() -> None:
-    assert GROUPS == ("OUTP", "BSWV", "MDWV", "SWWV", "BTWV")
+    assert GROUPS == ("OUTP", "BSWV", "MDWV", "SWWV", "BTWV", "ARWV", "SRATE")
 
 
 def test_build_mdwv_strings() -> None:

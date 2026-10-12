@@ -4,7 +4,10 @@ The fake is an independent oracle: it imports nothing from ``pyvisa``, ``openhtf
 this package (a shared parser would hide parser bugs), and it is the only instrument coder agents may talk
 to. It emulates the v1 command subset: ``*IDN?``, ``*OPC``/``*OPC?``, ``*RST``, ``<ch>:OUTP`` and
 ``<ch>:BSWV`` with their queries, and ``<ch>:MDWV`` (PG02 §3.5), ``<ch>:SWWV`` (§3.6.1) and ``<ch>:BTWV``
-(§3.7) as the modulation recon of 2026-10-05 measured them (README).
+(§3.7) as the modulation recon of 2026-10-05 measured them (README), and arbitrary waveforms as the arb recons A
+and B of 2026-10-12 measured them: ``<ch>:ARWV`` (§3.9.1), ``<ch>:SRATE`` (§3.40), ``STL?`` (§3.31), the binary
+``<ch>:WVDT`` upload through ``write_raw`` and the binary ``WVDT?`` reply through ``write`` + ``read_message``
+(§3.32). Rules from the arb recons carry ``# measured, arb recon A/B (README)``; the rest ``# hypothesis``.
 
 The only source of SCPI is the official Siglent guide, ``docs/PG02-E05C.txt`` ("PG02"). Section numbers in
 the comments below refer to it, and the SDG2000X column of its availability tables is the one that counts.
@@ -19,6 +22,7 @@ out-of-range values without any sign; only commands that PG02 does not define ra
 
 import math
 import re
+import struct
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Final
@@ -164,6 +168,48 @@ _BT_TIME_MAX: Final = 1000000
 _BT_DLAY_MAX: Final = 100.0
 _PWM_DEVI_DEFAULT: Final = 0.00019
 
+# Arbitrary waveforms. PG02 §3.9.1 "ArbWaVe" (short ARWV), §3.40 "SampleRATE" (short SRATE), §3.31 "SToreList" (STL).
+# The long spellings are accepted like the BSWV ones.   # hypothesis
+_ARWV_HEADERS: Final = frozenset({"ARWV", "ARBWAVE"})
+_SRATE_HEADERS: Final = frozenset({"SRATE", "SAMPLERATE"})
+_STL_RE: Final = re.compile(r"^(?:STL|STORELIST)\?\s*(.*)$", re.IGNORECASE)
+_WVDT_QUERY_RE: Final = re.compile(r"^WVDT\?\s*(.*)$", re.IGNORECASE)
+_WVDT_WRITE_RE: Final = re.compile(rb"^(C[12]):WVDT\s+(.*)$", re.IGNORECASE | re.DOTALL)
+_ARB_POINTS_BUILTIN: Final = 16384  # every built-in has 16384 points (32768 bytes)   # measured, arb recon A (A8)
+_SRATE_MAX: Final = 75e6  # VALUE,1E9 reads 75000000Sa/s   # measured, arb recon A (A11)
+_SRATE_DEFAULT: Final = 16384000.0  # TrueArb rate after *RST   # measured, arb recon A (A11)
+_WVDT_HEADER_KEYS: Final = frozenset({"WVNM", "LENGTH", "FREQ", "AMPL", "OFST", "PHASE"})  # PG02 §3.32
+_WVDT_APPLIED: Final = (("FREQ", "FRQ"), ("AMPL", "AMP"), ("OFST", "OFST"), ("PHASE", "PHSE"))  # file header -> BSWV key
+
+# The built-in table of this unit, index = position: PG02 §3.9.1's table shifted by two (StairUp is index 0). It is the
+# ``STL? BUILDIN`` reply (PG02 §3.31) of tests/data/hardware_arb_1.txt; a test asserts equality with scpi.BUILTIN_ARBS.
+# measured, arb recon A (A2)
+_BUILTIN_ARBS: Final[tuple[str, ...]] = (
+    "StairUp", "StairDn", "StairUD", "Ppulse", "Npulse", "Trapezia", "Upramp", "Dnramp", "ExpFal", "ExpRise",
+    "LogFall", "LogRise", "Sqrt", "Root3", "X^2", "X^3", "Sinc", "Gussian", "Dlorentz", "Haversine",
+    "Lorentz", "Gauspuls", "Gmonopuls", "Tripuls", "Cardiac", "Quake", "Chirp", "Twotone", "SNR", "Hamming",
+    "Hanning", "kaiser", "Blackman", "Gausswin", "Triangle", "Bartlett-Hann", "Bartlett", "Tan", "Cot", "Sec",
+    "Csc", "Asin", "Acos", "Atan", "Acot", "Square", "SineTra", "SineVer", "AmpALT", "AttALT", "RoundHalf",
+    "RoundsPM", "BlaseiWave", "DampedOsc", "SwingOsc", "Discharge", "Pahcur", "Combin", "SCR", "Butterworth",
+    "Chebyshev1", "Chebyshev2", "TV", "Voice", "Surge", "Radar", "Ripple", "Gamma", "StepResp", "BandLimited",
+    "CPulse", "CWPulse", "GateVibr", "LFMPulse", "MCNoise", "AM", "FM", "PFM", "PM", "PWM", "EOG", "EEG",
+    "EMG", "Pulseilogram", "ResSpeed", "ECG1", "ECG2", "ECG3", "ECG4", "ECG5", "ECG6", "ECG7", "ECG8", "ECG9",
+    "ECG10", "ECG11", "ECG12", "ECG13", "ECG14", "ECG15", "LFPulse", "Tens1", "Tens2", "Tens3", "Airy",
+    "Besselj", "Bessely", "Dirichlet", "Erf", "Erfc", "ErfcInv", "ErfInv", "Laguerre", "Legend", "Versiera",
+    "Weibull", "LogNormal", "Laplace", "Maxwell", "Rayleigh", "Cauchy", "CosH", "CosInt", "CotH", "CscH",
+    "SecH", "SinH", "SinInt", "TanH", "ACosH", "ASecH", "ASinH", "ATanH", "ACsch", "ACoth", "Bartlett",
+    "BohmanWin", "ChebWin", "FlattopWin", "ParzenWin", "TaylorWin", "TukeyWin", "SquareDuty01",
+    "SquareDuty02", "SquareDuty04", "SquareDuty06", "SquareDuty08", "SquareDuty10", "SquareDuty12",
+    "SquareDuty14", "SquareDuty16", "SquareDuty18", "SquareDuty20", "SquareDuty22", "SquareDuty24",
+    "SquareDuty26", "SquareDuty28", "SquareDuty30", "SquareDuty32", "SquareDuty34", "SquareDuty36",
+    "SquareDuty38", "SquareDuty40", "SquareDuty42", "SquareDuty44", "SquareDuty46", "SquareDuty48",
+    "SquareDuty50", "SquareDuty52", "SquareDuty54", "SquareDuty56", "SquareDuty58", "SquareDuty60",
+    "SquareDuty62", "SquareDuty64", "SquareDuty66", "SquareDuty68", "SquareDuty70", "SquareDuty72",
+    "SquareDuty74", "SquareDuty76", "SquareDuty78", "SquareDuty80", "SquareDuty82", "SquareDuty84",
+    "SquareDuty86", "SquareDuty88", "SquareDuty90", "SquareDuty92", "SquareDuty94", "SquareDuty96",
+    "SquareDuty98", "SquareDuty99", "demo1_375pts", "demo1_16kpts", "demo2_3kpts", "demo2_16kpts",
+)
+
 _WRITE_RE: Final = re.compile(r"^(C[12]):([A-Za-z_]+)(?:\s+(.*))?$", re.IGNORECASE)
 _QUERY_RE: Final = re.compile(r"^(C[12]):([A-Za-z_]+)\?$", re.IGNORECASE)
 _NUMBER_RE: Final = re.compile(r"^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$")
@@ -259,6 +305,11 @@ class _Channel:
     bt_trmd: str = "OFF"
     bt_mode: str = "NCYC"
     bt_plrt: str = "NEG"
+    # Arbitrary waveform selection and sample rate.   # measured, arb recon A (A1, A10, A11)
+    arb_index: int = 0  # built-in selection (valid while arb_user is None)
+    arb_user: str | None = None  # name of the selected user wave, as stored
+    srate_mode: str = "DDS"  # "DDS" or "TARB"
+    srate_value: float = _SRATE_DEFAULT  # TrueArb rate in Sa/s; one quantity with FRQ while in TARB
 
 
 class FakeSdgResource:
@@ -277,7 +328,8 @@ class FakeSdgResource:
         self.serial = serial
         self.firmware = firmware
         # Attributes the plug sets on a real resource.
-        self.timeout: float | None = 2000.0
+        self._timeout: float | None = 2000.0
+        self.timeout_history: list[float | None] = []  # every value assigned to ``timeout`` after construction
         self.read_termination: str | None = "\n"
         self.write_termination: str | None = "\n"  # PG02 §5.2.1
         self.chunk_size: int = 20480
@@ -287,6 +339,19 @@ class FakeSdgResource:
         self._raise_on = tuple(raise_on)
         self._limits = _LIMITS.get(model.strip().upper(), _LIMITS[_FALLBACK_LIMITS])
         self._channels: dict[str, _Channel] = {name: _Channel() for name in _CHANNELS}
+        # The user wave store, shared by both channels, in upload order: name -> (header fields as given, data).
+        # Kept across *RST.   # measured, arb recon B (B7, B8)
+        self.user_arbs: dict[str, tuple[dict[str, str], bytes]] = {}
+        self._pending: bytes | None = None  # the binary reply of the last ``WVDT?`` write, for read_message()
+
+    @property
+    def timeout(self) -> float | None:
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, value: float | None) -> None:
+        self._timeout = value
+        self.timeout_history.append(value)
 
     # ----------------------------------------------------------------------------------------------------
     # PyVISA-like surface
@@ -297,16 +362,63 @@ class FakeSdgResource:
         and then dropped without being applied; undefined commands raise ``ValueError``."""
         self.log.append(message)
         self._maybe_raise(message)
+        self._pending = None  # a new order drops an unread binary reply (the next query answers normally, A9)
         if any(message.startswith(prefix) for prefix in self._reject):
             return len(message)
         self._execute(message.strip())
         return len(message)
+
+    def write_raw(self, data: bytes, /) -> int:
+        """Binary write; only ``<ch>:WVDT`` uploads are accepted (PG02 §3.32), anything else raises ``ValueError``.
+
+        The header is logged (up to and including ``WAVEDATA,``), not the data.
+        """
+        marker = b"WAVEDATA,"
+        cut = data.find(marker)
+        match = _WVDT_WRITE_RE.match(data)
+        if match is None or cut < 0:
+            raise ValueError(f"undefined binary command: {data[:60]!r}")
+        header = data[: cut + len(marker)].decode("ascii", errors="replace")
+        self.log.append(header)
+        self._maybe_raise(header)
+        self._pending = None
+        if any(header.startswith(prefix) for prefix in self._reject):
+            return len(data)
+        fields_text = data[match.start(2) : cut].decode("ascii", errors="replace")
+        tokens = [token.strip() for token in fields_text.split(",") if token.strip()]
+        if len(tokens) % 2:
+            raise ValueError(f"undefined command: {header}")
+        fields: dict[str, str] = {}
+        for key, value in zip(tokens[0::2], tokens[1::2], strict=True):
+            if key.upper() not in _WVDT_HEADER_KEYS:
+                raise ValueError(f"undefined command: {header}")
+            fields[key.upper()] = value
+        if "WVNM" not in fields:
+            raise ValueError(f"undefined command: {header}")
+        rest = data[cut + len(marker) :]
+        # The terminator is not data, unless the data length is odd: then the generator stores the "\n" as the last
+        # byte. LENGTH is ignored.   # measured, arb recon B (B1, B2)
+        payload = rest[:-1] if rest.endswith(b"\n") and (len(rest) - 1) % 2 == 0 else rest
+        name = fields.pop("WVNM")
+        fields.pop("LENGTH", None)
+        # Quotes stay in the name and a space is not dropped (the generator drops it).   # not modelled (B3)
+        self.user_arbs[name] = ({k: v for k, v in fields.items()}, payload)  # re-upload replaces data and header (B4)
+        return len(data)
+
+    def read_message(self) -> bytes:
+        """The one message the generator sends for the last ``write('WVDT? ...')`` (A9, B5). Raises ``ValueError``
+        when there is no pending reply."""
+        if self._pending is None:
+            raise ValueError("no pending binary reply")
+        message, self._pending = self._pending, None
+        return message
 
     def query(self, message: str, /, delay: float | None = None) -> str:
         """Answer a query. ``delay`` is accepted for PyVISA compatibility and ignored (never sleeps)."""
         del delay
         self.log.append(message)
         self._maybe_raise(message)
+        self._pending = None
         return self._answer(message.strip())
 
     def close(self) -> None:
@@ -323,9 +435,16 @@ class FakeSdgResource:
     def _execute(self, cmd: str) -> None:
         upper = cmd.upper()
         if upper == "*RST":  # PG02 §3.1.3: recall the default setup
-            self._channels = {name: _Channel() for name in _CHANNELS}
+            # The selection returns to index 0 and the mode to DDS, the user waves stay   # measured, arb recon B (B8)
+            # The TrueArb rate is kept   # hypothesis: transcript B starts with the value 16384000 after *RST, but the unit may have been power cycled
+            rates = {name: channel.srate_value for name, channel in self._channels.items()}
+            self._channels = {name: _Channel(srate_value=rates[name]) for name in _CHANNELS}
             return
         if upper == "*OPC":  # PG02 §3.1.2: sets the OPC bit, "no other effect"
+            return
+        wvdt = _WVDT_QUERY_RE.match(cmd)
+        if wvdt is not None:  # PG02 §3.32 WVDT? Mn / WVDT? USER,<name>: a binary reply, read with read_message()
+            self._pending = self._wvdt_reply(wvdt.group(1).strip(), cmd)
             return
         match = _WRITE_RE.match(cmd)
         if match is not None:
@@ -339,6 +458,12 @@ class FakeSdgResource:
                     return
                 if header in _BSWV_HEADERS:  # PG02 §3.4
                     self._write_bswv(channel, tokens, cmd)
+                    return
+                if header in _ARWV_HEADERS:  # PG02 §3.9.1
+                    self._write_arwv(channel, tokens, cmd)
+                    return
+                if header in _SRATE_HEADERS:  # PG02 §3.40
+                    self._write_srate(channel, tokens, cmd)
                     return
                 if header in _MDWV_HEADERS:  # PG02 §3.5
                     self._write_mod(channel, "MDWV", tokens, cmd)
@@ -421,10 +546,12 @@ class FakeSdgResource:
         factor = _VRMS_FACTOR.get(channel.wvtp)
         if key == "FRQ":
             self._set_frq(channel, value)
+            self._tarb_rate_follows_frq(channel)
             self._sweep_follow_carrier(channel)
         elif key == "PERI":  # PERI = 1/FRQ
             if value > 0:
                 self._set_frq(channel, 1 / value)
+                self._tarb_rate_follows_frq(channel)
                 self._sweep_follow_carrier(channel)
         elif key == "AMP":
             self._set_amp(channel, value)
@@ -461,6 +588,8 @@ class FakeSdgResource:
         if channel.wvtp == "PULSE":  # leaving PULSE turns its delay into the phase   # measured, hardware session 1 (README)
             channel.phse = _snap(-360 * channel.dly * channel.frq)
         channel.wvtp = wvtp  # every other value survives the change   # measured, hardware session 1 (README)
+        if wvtp != "ARB":  # TrueArb belongs to ARB   # hypothesis: not measured, the transcripts leave TARB only through DDS
+            channel.srate_mode = "DDS"
         before = channel.frq
         self._set_frq(channel, channel.frq)  # frequency (and with it SQUARE duty, PULSE width) clamped for the new type
         if channel.frq != before:  # a clamped carrier frequency: the sweep follows (A12)   # measured, modulation recon (README)
@@ -532,6 +661,127 @@ class FakeSdgResource:
         elif key == "BANDWIDTH":  # clamped   # measured, hardware session 1 (README)
             channel.bandwidth = min(max(value, _BANDWIDTH_MIN), _BANDWIDTH_MAX)
         # MAX_OUTPUT_AMP (PG02 §3.3): accepted, no visible effect   # measured, hardware session 1 (README)
+
+    # ----------------------------------------------------------------------------------------------------
+    # Arbitrary waveforms (PG02 §3.9.1 ARWV, §3.31 STL, §3.32 WVDT, §3.40 SRATE)
+    # ----------------------------------------------------------------------------------------------------
+
+    def _arb_points(self, channel: _Channel) -> int:
+        """Points of the selected wave: 16384 for a built-in, half the bytes for a user wave.   # measured, arb recon A (A8)"""
+        if channel.arb_user is not None and channel.arb_user in self.user_arbs:
+            return max(len(self.user_arbs[channel.arb_user][1]) // 2, 1)
+        return _ARB_POINTS_BUILTIN
+
+    def _tarb_frq_from_rate(self, channel: _Channel) -> None:
+        """In TrueArb, ``FRQ = VALUE / points``.   # measured, arb recon A and B (A11, B6)"""
+        self._set_frq(channel, channel.srate_value / self._arb_points(channel))
+
+    def _tarb_rate_follows_frq(self, channel: _Channel) -> None:
+        """A frequency written in TrueArb sets ``VALUE = FRQ * points``.   # measured, arb recon A (A11)"""
+        if channel.srate_mode != "TARB" or channel.wvtp != "ARB" or channel.frq <= 0:
+            return
+        points = self._arb_points(channel)
+        value = channel.frq * points
+        if value > _SRATE_MAX:  # hypothesis: the clamp of VALUE applies here too, and FRQ follows
+            value = _SRATE_MAX
+            self._set_frq(channel, value / points)
+        channel.srate_value = value
+
+    def _write_arwv(self, channel: _Channel, tokens: list[str], cmd: str) -> None:
+        # PG02 §3.9.1: <channel>:ARWV INDEX,<index> | NAME,<name>
+        pairs = _pairs(tokens)
+        for key, _ in pairs:  # grammar check first
+            if key not in ("INDEX", "NAME"):
+                raise ValueError(f"undefined command: {cmd}")
+        for key, value in pairs:
+            if value is None:
+                continue
+            if key == "INDEX":
+                number = _parse_number(value)
+                # outside 0..196 is ignored (198, 199 measured); a fraction: hypothesis
+                if number is not None and number == int(number) and 0 <= int(number) < len(_BUILTIN_ARBS):
+                    self._select_arb(channel, int(number), None)
+            else:
+                # NAME selects a user wave only; a built-in name is ignored, an unknown name is ignored; a trailing
+                # ".bin" is accepted; names are case-sensitive   # measured, arb recon A and B (A3, B3)
+                name = value.removesuffix(".bin")
+                if name in self.user_arbs:
+                    self._select_arb(channel, channel.arb_index, name)
+
+    def _select_arb(self, channel: _Channel, index: int, user: str | None) -> None:
+        channel.arb_index, channel.arb_user = index, user
+        # Selecting switches the channel to ARB   # measured, arb recon A (A4)
+        self._set_wvtp(channel, "ARB")
+        # hypothesis: modulation, sweep and burst stay on, as for a type change through CARR,WVTP
+        self._carrier_changed(channel)
+        if channel.srate_mode == "TARB":  # hypothesis: the frequency follows the new point count
+            self._tarb_frq_from_rate(channel)
+        if user is not None:
+            # The parameters stored in the file header are applied, exactly those the file was uploaded with, through
+            # the same path as the BSWV writes   # measured, arb recon A and B (A5, B1)
+            header = self.user_arbs[user][0]
+            for header_key, bswv_key in _WVDT_APPLIED:
+                if header_key in header:
+                    self._set_bswv(channel, bswv_key, header[header_key])
+                    self._carrier_changed(channel)
+
+    def _write_srate(self, channel: _Channel, tokens: list[str], cmd: str) -> None:
+        # PG02 §3.40: <channel>:SRATE MODE,<mode>,VALUE,<rate>; INTER is not available on the SDG2000X (§3.40
+        # table): defined, silently ignored   # hypothesis
+        pairs = _pairs(tokens)
+        for key, _ in pairs:
+            if key not in ("MODE", "VALUE", "INTER"):
+                raise ValueError(f"undefined command: {cmd}")
+        for key, value in pairs:
+            if value is None or key == "INTER":
+                continue
+            if key == "MODE":
+                mode = value.upper()
+                if mode == "TARB" and channel.srate_mode != "TARB":
+                    channel.srate_mode = "TARB"
+                    self._set_wvtp(channel, "ARB")  # TARB switches the channel to ARB   # measured, arb recon A (A4)
+                    self._carrier_changed(channel)
+                    self._tarb_frq_from_rate(channel)  # keeps VALUE, recomputes FRQ   # measured, arb recon B (B6)
+                elif mode == "DDS":
+                    channel.srate_mode = "DDS"  # the frequency is kept   # measured, arb recon A (A11)
+            elif channel.srate_mode == "TARB":  # VALUE under DDS is ignored   # measured, arb recon A (A10)
+                number = _parse_number(value)
+                if number is not None and number > 0:  # hypothesis: zero and negative values are ignored
+                    channel.srate_value = min(number, _SRATE_MAX)  # clamp: measured, arb recon A (A11)
+                    self._tarb_frq_from_rate(channel)
+                    self._sweep_follow_carrier(channel)
+
+    def _wvdt_reply(self, argument: str, cmd: str) -> bytes:
+        """The binary reply to ``WVDT? USER,<name>`` or ``WVDT? M<i>`` (PG02 §3.32).   # measured, arb recon A and B (A8, B8)"""
+        if argument.upper().startswith("USER,"):
+            name = argument[5:].strip()
+            if "," in name or not name:
+                raise ValueError(f"undefined command: {cmd}")  # the path form is not modelled
+            if name not in self.user_arbs:
+                return b""  # an unknown wave answers an empty message
+            data = self.user_arbs[name][1]
+            return f"WVDT POS, /Local, WVNM, {name}, LENGTH, {len(data)}B, TYPE, 6, WAVEDATA,".encode("ascii") + data + b"\n"
+        built = re.fullmatch(r"[Mm](\d+)", argument)
+        if built is None:
+            raise ValueError(f"undefined command: {cmd}")
+        index = int(built.group(1))
+        if index >= len(_BUILTIN_ARBS):
+            return b""  # hypothesis: an index beyond the table answers an empty message like an unknown name
+        # hypothesis: only M2 and M18 were read; every built-in is a 16384-point ramp here
+        ramp = struct.pack("<16384h", *(-32768 + (i * 65535) // (_ARB_POINTS_BUILTIN - 1) for i in range(_ARB_POINTS_BUILTIN)))
+        head = f"WVDT POS, M{index}, WVNM, {_BUILTIN_ARBS[index]}, LENGTH, {len(ramp)}B, TYPE, 6, WAVEDATA,"
+        return head.encode("ascii") + ramp + b"\n"
+
+    def _stl_reply(self, argument: str, cmd: str) -> str:
+        """``STL?`` and ``STL? BUILDIN`` (all built-ins, ``M<n>`` pairs sorted as strings), ``STL? USER`` (PG02 §3.31)."""
+        what = argument.strip().upper()
+        if what in ("", "BUILDIN"):  # measured, arb recon A (A2)
+            order = sorted(range(len(_BUILTIN_ARBS)), key=str)
+            return "STL " + ", ".join(f"M{i}, {_BUILTIN_ARBS[i]}" for i in order)
+        if what == "USER":
+            # upload order; the generator's order is neither alphabetical nor by time (B7)   # not modelled
+            return "STL " + ",".join(["WVNM", *self.user_arbs])  # measured, arb recon A (A7)
+        raise ValueError(f"undefined query: {cmd}")  # the path forms are not modelled
 
     # ----------------------------------------------------------------------------------------------------
     # Modulation, sweep, burst (PG02 §3.5, §3.6.1, §3.7)
@@ -836,10 +1086,19 @@ class FakeSdgResource:
             return f"Siglent Technologies,{self.model},{self.serial},{self.firmware}"
         if upper == "*OPC?":  # PG02 §3.1.2, response Format 2: the bare character 1
             return "1"
+        stl = _STL_RE.match(cmd)
+        if stl is not None:  # PG02 §3.31
+            return self._stl_reply(stl.group(1), cmd)
+        if _WVDT_QUERY_RE.match(cmd) is not None:  # PG02 §3.32
+            raise ValueError("binary reply: use read_message()")
         match = _QUERY_RE.match(cmd)
         if match is not None:
             name = match.group(1).upper()
             header = match.group(2).upper()
+            if header in _ARWV_HEADERS:  # PG02 §3.9.1
+                return self._arwv_reply(name, self._channels[name])
+            if header in _SRATE_HEADERS:  # PG02 §3.40
+                return self._srate_reply(name, self._channels[name])
             if header in _OUTP_HEADERS:  # PG02 §3.3 query <channel>:OUTPut?
                 return self._outp_reply(name, self._channels[name])
             if header in _BSWV_HEADERS:  # PG02 §3.4 query <channel>:BaSic_WaVe?
@@ -851,6 +1110,20 @@ class FakeSdgResource:
             if header in _BTWV_HEADERS:  # PG02 §3.7
                 return self._mod_reply(name, "BTWV", self._channels[name])
         raise ValueError(f"undefined query: {cmd}")
+
+    @staticmethod
+    def _arwv_reply(name: str, channel: _Channel) -> str:
+        # PG02 §3.9.1 response format; a user wave has no INDEX field   # measured, arb recon A (A1, A3)
+        if channel.arb_user is not None:
+            return f"{name}:ARWV NAME,{channel.arb_user}.bin"
+        return f"{name}:ARWV INDEX,{channel.arb_index},NAME,{_BUILTIN_ARBS[channel.arb_index]}"
+
+    @staticmethod
+    def _srate_reply(name: str, channel: _Channel) -> str:
+        # PG02 §3.40 examples; the rate prints with 10 significant digits   # measured, arb recon A (A10, A12)
+        if channel.srate_mode == "DDS":
+            return f"{name}:SRATE MODE,DDS"
+        return f"{name}:SRATE MODE,TARB,VALUE,{_g(channel.srate_value, 10)}Sa/s"
 
     @staticmethod
     def _outp_reply(name: str, channel: _Channel) -> str:

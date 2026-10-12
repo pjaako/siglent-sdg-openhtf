@@ -35,6 +35,32 @@ Keys are the SCPI mnemonics of the official programming guide (`docs/`), so ever
 (an int or `INF`), `EDGE`, `COUNT`. The carrier of all three is the `BSWV` group; the plug never sends `CARR`.
 Only one of the three can be on per channel, and a group with keys needs `STATE` on.
 `manual_trigger(channel, 'SWWV' | 'BTWV')` sends `MTRIG`.
+`ARWV` (§3.9.1): `INDEX` (a built-in, 0..196) or `NAME` (a user wave), exactly one. `SRATE` (§3.40): `MODE`
+(`DDS` or `TARB`) and `VALUE` (Sa/s, only with `MODE` `TARB`). Both need `BSWV` `WVTP` `ARB` in the same channel
+setup, and `SRATE` `VALUE` cannot be combined with `BSWV` `FRQ`/`PERI` (in TrueArb they are one quantity).
+`ARWV` is written right after `WVTP`, before `FRQ`, `AMP`, `OFST`, `PHSE`, because selecting a user wave applies
+the parameters stored in its file.
+
+```python
+SETUP_BUILTIN = {'C1': {'BSWV': {'WVTP': 'ARB', 'FRQ': 1000.0, 'AMP': 2.0},
+                        'ARWV': {'INDEX': 5}}}                # index 5 is Trapezia on this unit (see below)
+generator.apply_setup(SETUP_BUILTIN)
+generator.get_arb(1)                      # {'INDEX': 5.0, 'NAME': 'Trapezia'}
+
+generator.upload_arb(1, 'my_ramp', samples, freq=1000, ampl=2.0, ofst=0.0, phase=0)   # samples: ints -32768..32767
+SETUP_TARB = {'C1': {'BSWV': {'WVTP': 'ARB', 'AMP': 2.0},
+                     'ARWV': {'NAME': 'my_ramp'},
+                     'SRATE': {'MODE': 'TARB', 'VALUE': 4096000}}}   # 4096 points: 1 kHz
+generator.apply_setup(SETUP_TARB)
+generator.get_sample_rate(1)              # {'MODE': 'TARB', 'VALUE': 4096000.0}
+```
+
+`upload_arb(channel, name, samples, *, freq, ampl, ofst, phase, verify=True)` writes the wave (little-endian
+int16, 2 to 8 000 000 points) and, with `verify`, checks `STL? USER` and reads the data back. It does not select
+the wave; `apply_setup` with `ARWV` does. Names are 1 to 40 characters of `A-Za-z0-9_-`, without `.bin`.
+`read_arb(name_or_index)` returns the header fields and the data bytes, `list_arbs()` the built-ins by index,
+`list_user_arbs()` the user wave names (use it as a set: the order is the generator's). The plug raises the VISA
+timeout to at least 30 s around uploads and read-backs. There is no delete: only the front panel removes a wave.
 
 ```python
 SETUP_AM = {'C1': {'BSWV': {'WVTP': 'SINE', 'FRQ': 10000.0, 'AMP': 2.0},
@@ -124,6 +150,51 @@ replays it in `tests/test_hardware_session_1.py`.
 - `BTWV?`, NCYC: `STATE,ON,PRD,0.01S,STPS,0,TRSR,INT,TRMD,OFF,TIME,1,DLAY,6.04035e-07S,GATE_NCYC,NCYC,CARR,...`.
   `PRD` only with `TRSR,INT`, `TRMD` (`OFF`, `RISE`, `FALL`) not with `EXT`. GATE: `PRD,STPS,TRSR,GATE_NCYC,PLRT` (default `PLRT,NEG`).
   A PULSE carrier has no `STPS`. A NOISE carrier: `STATE,ON,PLRT,POS,CARR,WVTP,NOISE,STDEV,..,MEAN,..`.
+
+## Facts (measured on the generator): arbitrary waveforms (2026-10-12)
+
+SDG2042X, firmware 2.01.01.23R7, VXI-11. Transcripts `tests/data/hardware_arb_1.txt` (recon A) and
+`hardware_arb_2.txt` (recon B); the fake replays them in `tests/test_hardware_arb.py` (75 and 69 replies
+compared, one listed as not modelled).
+
+- A1. `*RST` leaves both channels at `C1:ARWV INDEX,0,NAME,StairUp`, `WVTP,SINE`, `SRATE MODE,DDS`. The selection is per channel.
+- A2. The index table of this unit is PG02's table shifted by two: `STL? BUILDIN` lists 197 entries `M0` to `M196`
+  (sorted as strings, `M0, StairUp, M1, StairDn, M10, LogFall, ...`); 0 is StairUp, 1 StairDn, 2 StairUD, 3 Ppulse,
+  5 Trapezia, 18 Dlorentz, 196 demo2_16kpts. `STL?` answers like `STL? BUILDIN`. `scpi.BUILTIN_ARBS` has the table.
+- A3. `ARWV INDEX,<n>` selects; 198 and 199 are ignored. `NAME` with a built-in name (`StairDn`, `"StairUp"`, `sinc`) is
+  ignored. A user wave is selected with `NAME,<name>` and reads `C1:ARWV NAME,<name>.bin` (no `INDEX`). An unknown name is ignored.
+- A4. Selecting a wave, or `SRATE MODE,TARB`, switches a SINE channel to `WVTP,ARB`.
+- A5. Selecting a user wave applies the parameters stored in its file (`FREQ`, `AMPL`, `OFST`, `PHASE` as uploaded)
+  whatever the channel had before. So `ARWV` goes before `FRQ`/`AMP`/`OFST`/`PHSE`.
+- A6. `C1:WVDT WVNM,<name>,FREQ,<f>,AMPL,<vpp>,OFST,<v>,PHASE,<deg>,WAVEDATA,` + little-endian int16 + `\n`. The write
+  returns in 70 to 110 ms (32 B, 8 kB) and the next query answers after 2 ms. The upload does not select the wave.
+- A7. `STL? USER` is `STL WVNM` when empty, else `STL WVNM,<name>,...`. A re-upload under a name replaces the wave.
+  Names are listed without `.bin`.
+- A8. `WVDT? USER,<name>` answers `WVDT POS, /Local, WVNM, <name>, LENGTH, <n>B, TYPE, 6, WAVEDATA,` + `n` bytes +
+  `\n` as one message; built-ins: `WVDT? M<i>` with `POS, M<i>`, `LENGTH, 32768B` (16384 points). The bytes equal
+  the bytes sent, `0x0A` and `0x0D` included. 4 bytes (2 points) are accepted.
+- A9. The reply never carries the VXI-11 END flag and is re-sent whole on every further read, so `read_raw()`
+  never returns. One low-level read returns exactly one message; the next query is normal.
+- A10. `SRATE?` is `C1:SRATE MODE,DDS` or `C1:SRATE MODE,TARB,VALUE,16384000Sa/s`. `VALUE` is accepted only in TARB;
+  `MODE,TARB,VALUE,500000` works in one command.
+- A11. In TARB, `FRQ = VALUE / points` (one quantity): 1 kHz at 16384 points is `VALUE,16384000Sa/s`; `BSWV FRQ,2000`
+  makes `VALUE` 32768000. `VALUE,1E9` reads 75000000; 0.1 and 12345.678 are kept. Back in DDS the frequency is kept.
+  `MODE,TARB` keeps `VALUE` and recomputes `FRQ` (3 points: `5461333.333HZ`; 16385 points: `999.9389686HZ`).
+- A12. `FRQ` prints 10 significant digits (`61.03515625HZ`), `PERI` 6, `VALUE` 10.
+- A13. At the output (scope, 1 Mohm): DDS plays the table resampled (a 6-sample spike in a 4096-point ramp is absent),
+  TARB plays every point (the spike is there, +0.10 V). DDS at `FRQ,1000`: 1.000 ms sawtooth, 2.03 Vpp for `AMP,2`.
+- B1. A header-less upload (`C1:WVDT WVNM,<name>,WAVEDATA,`) is accepted; selecting it changes none of `FRQ`, `AMP`,
+  `OFST`, `PHSE`. A header with only `FREQ,250` changes only `FRQ`. `LENGTH,128B` in the header changes nothing.
+- B2. An odd byte count corrupts the data (5 bytes read back as 6, the last one the terminator). The plug refuses it.
+- B3. Names are case-sensitive (`HTF_B1` is another file than `htf_b1`); `NAME,htf_b1.bin` selects `htf_b1`; 40
+  characters work; the quoted `"htf b5-x"` is stored as `"htfb5-x"`, so the plug refuses names outside `[A-Za-z0-9_-]`.
+- B4. Re-uploading the selected wave replaces its data and keeps the selection and the channel parameters.
+- B5. 200 kB take 107 ms, 2 MB 444 ms, 16 MB (8 000 000 points) 3.6 s; the next query answers after 2 to 4 ms.
+  `WVDT?` of 16 MB arrives as one message in 2.6 s.
+- B6. See A11 for the point-count coupling. Any point count from 2 up works.
+- B7. The user store is shared by both channels (`C2:ARWV NAME,htf_b1`; `C2:WVDT` uploads into the same list). The
+  order of `STL? USER` is neither alphabetical nor by upload time.
+- B8. `WVDT? USER,<unknown>` answers an empty message (no hang). `*RST` resets the selection to index 0 and keeps the user store.
 
 ## Measured at the output: modulation, sweep, burst (2026-10-12)
 
@@ -231,6 +302,25 @@ A 50 ohm feed-through terminator at the scope input, generator CH1 to it over a 
   burst `DLAY` depends on the carrier frequency; a sweep `START` of 1e-06 reads `1.00001e-06HZ` after off and on.
 - `STATE,OFF` of `MDWV`, `SWWV` or `BTWV` switches the active mode off, whichever of the three it is. The
   plug writes the groups that are switched off before the one that is switched on.
+- Arbitrary waves (recons 2026-10-12). The index table is not PG02's: this unit's index 0 is StairUp, PG02's
+  index 0 is Sine, so an index taken from the manual selects the wave two places away. Read the table with
+  `list_arbs()` (`STL? BUILDIN`) or use `scpi.BUILTIN_ARBS`.
+- `WVDT?` never ends. The generator sets no END flag, ignores the requested size and sends the same whole message
+  again on every read, so PyVISA's `read_raw()` collects gigabytes. The plug reads once, with the termination
+  character off (the data contains `0x0A`). Do not read it any other way.
+- An odd number of data bytes is stored with the terminating newline as the last byte. The plug refuses odd counts.
+- Names: case-sensitive; `.bin` is added on read-back and accepted on input; a space in a quoted name is dropped.
+  Only `A-Za-z0-9_-`, 1 to 40 characters, are used by the plug (longer names are not measured).
+- PG02 defines no command to delete a user wave. Uploaded waves stay until removed at the front panel, so use fixed
+  names and re-upload instead of creating new ones. A re-upload overwrites.
+- DDS and TrueArb are different signals. DDS resamples the wave table at the frequency, which smooths narrow
+  features; TrueArb plays every point at the sample rate. Choose `SRATE MODE,TARB` when each point matters.
+- A wave's own `FREQ`, `AMPL`, `OFST`, `PHASE` are applied at selection and silently override what the channel had.
+  A wave without them leaves the channel alone. A re-upload of the selected wave updates the stored data and not the
+  channel parameters; whether the output follows without a new selection is checked on the scope at acceptance.
+- Not modelled: the space removal in quoted names (the one listed gap in the replay), the order of `STL? USER`, the
+  content of the built-ins (the fake serves a ramp), and whether `*RST` keeps the TrueArb `VALUE` (the second
+  transcript shows 16384000 after `*RST`, but the unit may have been power cycled in between; the fake keeps it).
 - Still open: USB via pyvisa-py (reports from other projects say it is unreliable); the other two models.
 
 ## Files
