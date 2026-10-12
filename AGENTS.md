@@ -51,6 +51,13 @@ it is the contract. Read `STATUS.md`; it says where the project stands and what 
   `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` and
   `Claude-Session: https://claude.ai/code/session_016T6mysSFTNJPE4srnUXug4`. No model identifiers in
   code or comments.
+- Roles: the agent in the interactive session is the **project owner, not a coder**. The owner writes the
+  SPECs and task briefs, delegates the grunt work (scripts from a precise brief, implementation against the
+  fake, tests, transcript sanitizing, documentation formatting) to subagents, checks their output against the
+  brief and these rules before integrating it, runs the hardware sessions, commits and pushes. Grunt work goes
+  to cheaper and faster models (Haiku or Sonnet class); the owner's own effort is spent on specs, reviews,
+  analysis of measurements and hardware. A brief names the files to touch, the exact behaviour, how the
+  subagent verifies without hardware, and what it must report back.
 - Workflow: the project-owner agent writes `SPEC*.md`, delegates implementation to coder agents, reviews,
   integrates, commits and pushes after each task, and keeps `STATUS.md`, `README.md` and the SPECs
   current so a cold agent can take over at any moment. Hardware is needed only after the fake-backed
