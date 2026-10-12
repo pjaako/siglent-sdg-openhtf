@@ -125,16 +125,19 @@ def test_selection_switches_a_sine_channel_to_arb() -> None:
     assert fake.query("C1:BSWV?").startswith("C1:BSWV WVTP,SINE,")  # PG02 §3.4
 
 
-def test_names_are_case_sensitive_and_bin_suffix_is_accepted() -> None:
+def test_names_are_case_sensitive_and_bin_suffix_is_ignored() -> None:
     fake = _fake()
     _upload(fake, "htf_b1")
     _upload(fake, "HTF_B1")
     fake.write("C1:ARWV NAME,HTF_B1")  # PG02 §3.9.1
     assert fake.query("C1:ARWV?") == "C1:ARWV NAME,HTF_B1.bin"  # PG02 §3.9.1
+    fake.write("C1:ARWV NAME,htf_b1.bin")  # PG02 §3.9.1: a name ending in .bin is ignored (F3)
+    assert fake.query("C1:ARWV?") == "C1:ARWV NAME,HTF_B1.bin"  # PG02 §3.9.1
+    fake.write("C1:ARWV INDEX,196")  # PG02 §3.9.1
     fake.write("C1:ARWV NAME,htf_b1.bin")  # PG02 §3.9.1
-    assert fake.query("C1:ARWV?") == "C1:ARWV NAME,htf_b1.bin"  # PG02 §3.9.1
+    assert fake.query("C1:ARWV?") == "C1:ARWV INDEX,196,NAME,demo2_16kpts"  # PG02 §3.9.1
     fake.write("C1:ARWV NAME,htf_B1")  # PG02 §3.9.1: unknown, ignored
-    assert fake.query("C1:ARWV?") == "C1:ARWV NAME,htf_b1.bin"  # PG02 §3.9.1
+    assert fake.query("C1:ARWV?") == "C1:ARWV INDEX,196,NAME,demo2_16kpts"  # PG02 §3.9.1
 
 
 def test_unknown_user_name_is_ignored() -> None:
@@ -314,3 +317,63 @@ def test_timeout_assignments_are_recorded() -> None:
     fake.timeout = 5000
     assert fake.timeout_history == [30000, 5000]
     assert fake.timeout == 5000
+
+
+def test_reset_restores_the_truearb_rate() -> None:  # F1
+    fake = _fake()
+    fake.write("C1:SRATE MODE,TARB,VALUE,2000000")  # PG02 §3.40
+    fake.write("C1:SRATE MODE,DDS")  # PG02 §3.40
+    fake.write("*RST")  # PG02 §3.1.3
+    fake.write("C1:SRATE MODE,TARB")  # PG02 §3.40
+    assert fake.query("C1:SRATE?") == "C1:SRATE MODE,TARB,VALUE,16384000Sa/s"  # PG02 §3.40
+    assert fake.query("C1:BSWV?").startswith("C1:BSWV WVTP,ARB,FRQ,1000HZ,")  # 16384000 / 16384, PG02 §3.4
+
+
+def test_builtin_lengths() -> None:  # F2
+    fake = _fake()
+    lengths = {}
+    for index in (0, 2, 18, 193, 194, 195, 196):
+        fields, data = parse_wvdt_reply(_read(fake, f"WVDT? M{index}"))  # PG02 §3.32
+        assert len(data) == fields["length"]
+        lengths[index] = fields["length"]
+    assert lengths == {0: 32768, 2: 32768, 18: 32768, 193: 750, 194: 32768, 195: 6000, 196: 32768}  # 195: hypothesis
+
+
+def test_tarb_frequency_uses_the_builtin_length() -> None:  # F2
+    fake = FakeSdgResource()
+    fake.write("C1:ARWV INDEX,193")  # PG02 §3.9.1
+    fake.write("C1:SRATE MODE,TARB,VALUE,375000")  # PG02 §3.40
+    assert fake.query("C1:BSWV?").startswith("C1:BSWV WVTP,ARB,FRQ,1000HZ,")  # 375 points, PG02 §3.4
+    fake.write("C1:BSWV FRQ,2000")  # PG02 §3.4
+    assert fake.query("C1:SRATE?") == "C1:SRATE MODE,TARB,VALUE,750000Sa/s"  # PG02 §3.40
+    fake.write("C1:ARWV INDEX,0")  # PG02 §3.9.1: 16384 points, the rate is kept
+    assert fake.query("C1:BSWV?").startswith("C1:BSWV WVTP,ARB,FRQ,45.77636719HZ,")  # 750000 / 16384, PG02 §3.4
+
+
+def test_sweep_follows_tarb_recompute_with_the_sweep_off() -> None:  # F4
+    fake = FakeSdgResource()
+    fake.write("C1:SRATE MODE,TARB")  # PG02 §3.40: FRQ becomes 16384000 / 16384 = 1000 Hz
+    fake.write("C1:SRATE VALUE,32768000")  # PG02 §3.40: FRQ 2000 Hz
+    fake.write("C1:SWWV STATE,ON")  # PG02 §3.6.1
+    reply = fake.query("C1:SWWV?")  # PG02 §3.6.1
+    assert reply.startswith("C1:SWWV STATE,ON,TIME,1S,STOP,2500HZ,START,1500HZ,"), reply
+
+
+def test_sweep_follows_tarb_switch_with_large_carrier() -> None:  # F4, the acceptance case
+    fake = FakeSdgResource()
+    _upload(fake, "w", header=",PHASE,45")
+    fake.write("C1:BSWV WVTP,ARB")  # PG02 §3.4
+    fake.write("C1:ARWV NAME,w")  # PG02 §3.9.1: 8 points
+    fake.write("C1:SRATE MODE,TARB")  # PG02 §3.40: 16384000 / 8 = 2048000 Hz
+    fake.write("C1:SWWV STATE,ON")  # PG02 §3.6.1
+    reply = fake.query("C1:SWWV?")  # PG02 §3.6.1
+    assert reply.startswith("C1:SWWV STATE,ON,TIME,1S,STOP,2.0485e+06HZ,START,2.0475e+06HZ,"), reply
+    assert "FRQ,2048000HZ" in reply
+
+
+def test_sweep_follows_a_stored_frequency_on_selection() -> None:  # F4
+    fake = FakeSdgResource()
+    _upload(fake, "w", header=",FREQ,5000")
+    fake.write("C1:ARWV NAME,w")  # PG02 §3.9.1
+    fake.write("C1:SWWV STATE,ON")  # PG02 §3.6.1
+    assert fake.query("C1:SWWV?").startswith("C1:SWWV STATE,ON,TIME,1S,STOP,5500HZ,START,4500HZ,")  # PG02 §3.6.1

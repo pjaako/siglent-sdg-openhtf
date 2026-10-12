@@ -227,3 +227,51 @@ with its PG02 section comment, no command outside §3.9.1, §3.31, §3.32, §3.4
 files changed, the final `pytest` line verbatim, the `mypy` line, the `UNMODELLED` entries with reasons, and every
 place where you departed from this spec and why. Then the owner runs the acceptance on the generator: a fresh sequence
 to the fake and the instrument at once, and the uploaded wave at the output with the scope (B4 live update).
+
+## Addendum 1: acceptance on the generator (owner, 2026-10-12)
+
+A fresh sequence (`dumps/arb_accept_plan.md`, 66 commands in S1 to S5, the plug calls of S6, the scope in S7) was
+sent to the fake and the generator at once. S6 matched on both (two `apply_setup` verified, an unknown `NAME`
+raised `SetupError` with the same message on both, `upload_arb` with verify and `read_arb(16)` succeeded, the
+validator refused `SRATE VALUE` with `FRQ` before sending anything). Ten reply differences, six facts:
+
+- F1. **`*RST` resets the TrueArb `VALUE` to 16384000 Sa/s** (`MODE,TARB,VALUE,2000000` set, `MODE,DDS`, `*RST`,
+  `MODE,TARB` reads `VALUE,16384000Sa/s`). The fake's hypothesis (kept) is wrong; five of the ten differences follow
+  from it (`FRQ,2048000HZ` for 8 points = 16384000/8, carried into SINE and back, D1 to D3, D5, D6).
+- F2. **Built-ins have different lengths**: `WVDT? M193` (demo1_375pts) answers `LENGTH, 750B` (375 points); `M0`, `M2`,
+  `M18`, `M196` answer `32768B`. The fake gets a length table: 750 for M193, 32768 for the rest; hypothesis for
+  M195 (demo2_3kpts) which was not read: 6000 bytes, mark it. TARB `FRQ = VALUE / points` uses that length.
+- F3. **`ARWV NAME,<name>.bin` is ignored** (with the built-in 196 selected it stayed selected). Recon B4 showed it
+  "working" only because `htf_b1` was already selected. The fake ignores names ending in `.bin`; the README and the
+  docstrings drop the claim that `.bin` is accepted on input (the reply still carries it; `values_match` unchanged).
+- F4. **The sweep follows every change of the carrier frequency, also while the sweep is off and also when the
+  change comes from `SRATE MODE,TARB` (recompute) or from a wave selection**: with the carrier at 2048000 Hz,
+  `SWWV STATE,ON` showed `STOP,2.0485e+06HZ,START,2.0475e+06HZ` (the span of 1000 Hz kept around the new carrier).
+  The fake's centring rule for `BSWV FRQ` writes applies to every carrier frequency change; `START`/`STOP` print
+  like `%g` (`2.0485e+06HZ`), as the existing sweep fields do.
+- F5. Not arb, known and still unmodelled: the modulation type survives `*RST` (`MDWV STATE,ON` came back as PSK from
+  the 2026-10-05 session) and the burst `DLAY` default depends on the carrier frequency (`5.4303e-07S` at 2048000 Hz).
+  Leave both in the unmodelled lists with these reasons.
+- F6. **At the output a re-upload of the selected wave does not change the signal; a new `ARWV NAME` does.** The
+  8-point rising ramp and its re-uploaded inversion gave identical captures (correlation 1.000); after re-selecting,
+  the output was the inverted ramp (0.79 against the previous capture, 0.91 against the inverted model). So after
+  `upload_arb` of a wave that is selected, `apply_setup` with `ARWV NAME` must be sent again; the plug documents it,
+  and `upload_arb` does not do it by itself (the upload may target a wave the test does not want selected).
+
+Also measured on the scope (not this project's plug): a saved setup block is dropped while the scope is in STOP
+(after `:SING`); after `:RUN` it loads at once. Recorded in `SPEC-station.md` and handed to the scope project.
+
+Fix-up brief (coder): apply F1 to F4 to the fake with tests; F3 and F6 to README, plug docstrings and the
+"Things the manual does not tell you" list; add `tests/data/hardware_arb_3.txt` sanitized from the acceptance log
+(`dumps/arb_accept_20261012-124752.txt`: drop the `#! fake:` lines, placeholder serial `SDG2XCAQ000000`, delete
+nothing else except `#t` lines; mark `#! ` the WVDT exchanges and the `STL WVNM` lists with two or more names as
+before) and replay it in `tests/test_hardware_arb.py` with the same rules; the S7 scope notes are `# ` lines and
+are ignored. Expected unmodelled entries after the fix-up: the `"htf b5-x"` name, the PSK type and the burst `DLAY`
+of F5. Everything in section 6 still applies.
+
+Fix-up outcome (owner, 2026-10-12): applied, 798 tests, three transcripts replay with three unmodelled replies.
+F4 was narrowed by the coder with good reason: `hardware_modulation_2.txt` line 338 and `hardware_modulation_3.txt`
+line 167 show a `BSWV FRQ` write leaving `START`/`STOP` alone while the sweep is off. The fake now moves the sweep
+on the TARB recompute, `SRATE VALUE` and a selection with a stored `FREQ` whether the sweep is on or off, and on
+`BSWV FRQ` only while it is on. Open: the generator may instead re-centre at `STATE,ON` only when the carrier lies
+outside `START..STOP` (both measurements fit that rule too); one sweep experiment on the generator decides it.

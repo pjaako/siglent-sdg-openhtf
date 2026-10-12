@@ -1,0 +1,176 @@
+# Transcript of the arb acceptance run: SDG2042X, firmware 2.01.01.23R7, VXI-11, 2026-10-12, a command sequence the fake was not built from.
+# '-> x' was sent, '<- y' is the reply to the query on the line above. Replies are verbatim.
+# '#! ' marks an exchange that is neither sent to nor compared with the fake (binary payloads shown as <N bytes sha1=.. first=..>, and STL? USER orders the fake does not model).
+# '## ' lines are section titles, '# ' lines are notes. Do not edit: this file is the oracle for tests/test_hardware_arb.py.
+
+## S1 TrueArb on C2, clamps, *RST and VALUE
+-> *IDN?
+<- Siglent Technologies,SDG2042X,SDG2XCAQ000000,2.01.01.23R7
+-> C1:BSWV WVTP,ARB
+-> C1:SRATE MODE,TARB,VALUE,2000000
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,2000000Sa/s
+-> C1:SRATE MODE,DDS
+-> *RST
+-> C2:SRATE MODE,TARB
+-> C2:SRATE?
+<- C2:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C2:BSWV?
+<- C2:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C2:ARWV INDEX,16
+-> C2:ARWV?
+<- C2:ARWV INDEX,16,NAME,Sinc
+-> C2:SRATE VALUE,100000000
+-> C2:SRATE?
+<- C2:SRATE MODE,TARB,VALUE,75000000Sa/s
+-> C2:BSWV?
+<- C2:BSWV WVTP,ARB,FRQ,4577.636719HZ,PERI,0.000218453S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C2:BSWV FRQ,100
+-> C2:SRATE?
+<- C2:SRATE MODE,TARB,VALUE,1638400Sa/s
+-> C2:SRATE MODE,DDS
+-> C2:BSWV FRQ,25E6
+-> C2:BSWV?
+<- C2:BSWV WVTP,ARB,FRQ,20000000HZ,PERI,5e-08S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C2:SRATE MODE,TARB
+-> C2:SRATE?
+<- C2:SRATE MODE,TARB,VALUE,1638400Sa/s
+-> C2:BSWV?
+<- C2:BSWV WVTP,ARB,FRQ,100HZ,PERI,0.01S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,0
+-> C2:SRATE MODE,DDS
+-> C1:BSWV WVTP,ARB
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C1:SRATE MODE,DDS
+
+## S2 upload with a partial header on C2, selection on C1, 8 points
+#! -> C2:WVDT WVNM,htf_test,PHASE,45,WAVEDATA,<16 bytes sha1=1a7d673b46d0 first=0000ff1fff3fff5fff7f008000c0ffff>
+-> STL? USER
+#! <- STL WVNM,htf_b4_0123456789012345678901234567,"htfb5-x",htf_test2,htf_big,htf_b1,htf_b2,htf_b3,htf_b7,htf_c2,HTF_B1,htf_test
+-> C1:BSWV WVTP,ARB
+-> C1:BSWV FRQ,2000
+-> C1:ARWV NAME,htf_test
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test.bin
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,2000HZ,PERI,0.0005S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45
+-> C1:SRATE MODE,TARB
+-> C1:SRATE?
+<- C1:SRATE MODE,TARB,VALUE,16384000Sa/s
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,2048000HZ,PERI,4.88281e-07S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45
+#! -> WVDT? USER,htf_test
+#! <- WVDT POS, /Local, WVNM, htf_test, LENGTH, 16B, TYPE, 6, WAVEDATA,<17 bytes sha1=c26982ccc27e first=0000ff1fff3fff5fff7f008000c0ffff>
+-> C1:SRATE MODE,DDS
+
+## S3 selection edge cases
+-> C1:ARWV INDEX,196
+-> C1:ARWV?
+<- C1:ARWV INDEX,196,NAME,demo2_16kpts
+-> C1:ARWV INDEX,-1
+-> C1:ARWV?
+<- C1:ARWV INDEX,196,NAME,demo2_16kpts
+-> C1:ARWV NAME,htf_test.bin
+-> C1:ARWV?
+<- C1:ARWV INDEX,196,NAME,demo2_16kpts
+-> C1:ARWV INDEX,7
+-> C1:ARWV?
+<- C1:ARWV INDEX,7,NAME,Dnramp
+-> C1:BSWV WVTP,SINE
+-> C1:ARWV?
+<- C1:ARWV INDEX,7,NAME,Dnramp
+-> C1:SRATE?
+<- C1:SRATE MODE,DDS
+-> C1:BSWV?
+<- C1:BSWV WVTP,SINE,FRQ,2048000HZ,PERI,4.88281e-07S,AMP,4V,AMPVRMS,1.414Vrms,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45
+-> C1:BSWV WVTP,ARB
+-> C1:ARWV?
+<- C1:ARWV INDEX,7,NAME,Dnramp
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,2048000HZ,PERI,4.88281e-07S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45
+
+## S4 lists and built-ins
+-> STL? USER
+#! <- STL WVNM,htf_b4_0123456789012345678901234567,"htfb5-x",htf_test2,htf_big,htf_b1,htf_b2,htf_b3,htf_b7,htf_c2,HTF_B1,htf_test
+#! -> WVDT? M193
+#! <- WVDT POS, M193, WVNM, demo1_375pts, LENGTH, 750B, TYPE, 6, WAVEDATA,<751 bytes sha1=5385ae94b96d first=00000000000000000000000000000000>
+# note: LENGTH real=750B fake=32768B
+#! -> WVDT? M196
+#! <- WVDT POS, M196, WVNM, demo2_16kpts, LENGTH, 32768B, TYPE, 6, WAVEDATA,<32769 bytes sha1=deb1041758bf first=00800080008000800080008000800080>
+#! -> WVDT? M0
+#! <- WVDT POS, M0, WVNM, StairUp, LENGTH, 32768B, TYPE, 6, WAVEDATA,<32769 bytes sha1=b03e1f3469fd first=00800080008000800080008000800080>
+
+## S5 modulation groups with an ARB carrier
+-> C1:MDWV STATE,ON
+-> C1:MDWV?
+<- C1:MDWV STATE,ON,PSK,SRC,INT,KFRQ,100HZ,PLRT,POS,CARR,WVTP,ARB,FRQ,2048000HZ,AMP,4V,OFST,0V,PHSE,45
+-> C1:SWWV STATE,ON
+-> C1:SWWV?
+<- C1:SWWV STATE,ON,TIME,1S,STOP,2.0485e+06HZ,START,2.0475e+06HZ,TRSR,INT,TRMD,OFF,SWMD,LINE,DIR,UP,CARR,WVTP,ARB,FRQ,2048000HZ,AMP,4V,OFST,0V,PHSE,45
+-> C1:BTWV STATE,ON
+-> C1:BTWV?
+<- C1:BTWV STATE,ON,PRD,0.01S,STPS,45,TRSR,INT,TRMD,OFF,TIME,1,DLAY,5.4303e-07S,GATE_NCYC,NCYC,CARR,WVTP,ARB,FRQ,2048000HZ,AMP,4V,OFST,0V,PHSE,45
+-> C1:BTWV STATE,OFF
+-> C1:BTWV?
+<- C1:BTWV STATE,OFF
+# commands in S1-S5: 66
+
+## S6 through the plug (both instruments)
+# S6 apply_setup INDEX/TARB: real=ok fake=ok
+# S6 apply_setup INDEX/TARB detail: real=- fake=-; commands logged by resource: real=? fake=11
+# S6 apply_setup NAME/DDS: real=ok fake=ok
+# S6 apply_setup NAME/DDS detail: real=- fake=-; commands logged by resource: real=? fake=7
+# S6 apply_setup htf_missing: real=SetupError: C1:ARWV NAME: sent htf_missing, read htf_test.bin fake=SetupError: C1:ARWV NAME: sent htf_missing, read htf_test.bin
+# S6 apply_setup htf_missing detail: real=- fake=-; commands logged by resource: real=? fake=4
+# S6 upload_arb+read_arb: real=ok fake=ok
+# S6 upload_arb+read_arb detail: real=points=16 read_arb(16) LENGTH=32768B data=32768 fake=points=16 read_arb(16) LENGTH=32768B data=32768; commands logged by resource: real=? fake=4
+# S6 validator SRATE VALUE+FRQ: real=ValueError: C1 BSWV FRQ: cannot be combined with SRATE VALUE; in TARB the frequency and the sample rate are one quantity fake=ValueError: C1 BSWV FRQ: cannot be combined with SRATE VALUE; in TARB the frequency and the sample rate are one quantity
+# S6 validator SRATE VALUE+FRQ detail: real=- fake=-; commands logged by resource: real=? fake=0
+# S6 validator: must be ValueError on both with 0 commands sent (the fake counts its log; the real count is n/a)
+
+## S7 at the output (generator and scope only)
+# arrays: ramp8=[0, 8191, 16383, 24575, 32767, -32768, -16384, -1] inverted8=[-1, -16384, -32768, 32767, 24575, 16383, 8191, 0] captures: accept_ramp8, accept_ramp8_reuploaded, accept_ramp8_reselected, accept_sinc (dumps/arb_<tag>.npz)
+-> C1:BSWV WVTP,ARB
+-> C1:ARWV NAME,htf_test
+-> C1:SRATE MODE,DDS
+-> C1:BSWV FRQ,1000
+-> C1:BSWV AMP,2
+-> C1:BSWV OFST,0
+-> C1:OUTP LOAD,HZ
+-> C1:BSWV?
+<- C1:BSWV WVTP,ARB,FRQ,1000HZ,PERI,0.001S,AMP,2V,OFST,0V,HLEV,1V,LLEV,-1V,PHSE,45
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test.bin
+-> C1:OUTP ON
+# scope accept_ramp8: Vpp=2.025 Vmax=1.018 Vmin=-1.007 f_rep=999.72 Hz crossings=7 rising_fraction=0.482
+#! -> C1:WVDT WVNM,htf_test,WAVEDATA,<16 bytes sha1=41ebf9587a5c first=ffff00c00080ff7fff5fff3fff1f0000>
+-> C1:ARWV?
+<- C1:ARWV NAME,htf_test.bin
+# scope accept_ramp8_reuploaded: Vpp=2.023 Vmax=1.019 Vmin=-1.004 f_rep=1000.88 Hz crossings=7 rising_fraction=0.482
+-> C1:ARWV NAME,htf_test
+# scope accept_ramp8_reselected: Vpp=2.024 Vmax=1.019 Vmin=-1.005 f_rep=1000.08 Hz crossings=7 rising_fraction=0.480
+-> C1:ARWV INDEX,16
+-> C1:ARWV?
+<- C1:ARWV INDEX,16,NAME,Sinc
+# scope accept_sinc: Vpp=1.262 Vmax=1.029 Vmin=-0.2324 f_rep=1000 Hz crossings=8 rising_fraction=0.478
+-> C1:OUTP OFF
+-> C2:OUTP OFF
+-> C1:OUTP?
+<- C1:OUTP OFF,LOAD,HZ,PLRT,NOR
+-> C2:OUTP?
+<- C2:OUTP OFF,LOAD,HZ,PLRT,NOR
+
+## cleanup
+
+## 10 differences
+# D1 S1 C1:SRATE?: real=C1:SRATE MODE,TARB,VALUE,16384000Sa/s fake=C1:SRATE MODE,TARB,VALUE,2000000Sa/s
+# D2 S2 C1:SRATE?: real=C1:SRATE MODE,TARB,VALUE,16384000Sa/s fake=C1:SRATE MODE,TARB,VALUE,2000000Sa/s
+# D3 S2 C1:BSWV?: real=C1:BSWV WVTP,ARB,FRQ,2048000HZ,PERI,4.88281e-07S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45 fake=C1:BSWV WVTP,ARB,FRQ,250000HZ,PERI,4e-06S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45
+# D4 S3 C1:ARWV?: real=C1:ARWV INDEX,196,NAME,demo2_16kpts fake=C1:ARWV NAME,htf_test.bin
+# D5 S3 C1:BSWV?: real=C1:BSWV WVTP,SINE,FRQ,2048000HZ,PERI,4.88281e-07S,AMP,4V,AMPVRMS,1.414Vrms,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45 fake=C1:BSWV WVTP,SINE,FRQ,250000HZ,PERI,4e-06S,AMP,4V,AMPVRMS,1.414Vrms,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45
+# D6 S3 C1:BSWV?: real=C1:BSWV WVTP,ARB,FRQ,2048000HZ,PERI,4.88281e-07S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45 fake=C1:BSWV WVTP,ARB,FRQ,250000HZ,PERI,4e-06S,AMP,4V,OFST,0V,HLEV,2V,LLEV,-2V,PHSE,45
+# D7 S4 WVDT? M193: real=WVDT POS, M193, WVNM, demo1_375pts, LENGTH, 750B, TYPE, 6, WAVEDATA,<751 bytes sha1=5385ae94b96d first=00000000000000000000000000000000> fake=WVDT POS, M193, WVNM, demo1_375pts, LENGTH, 32768B, TYPE, 6, WAVEDATA,<32769 bytes sha1=b5aa2b92f528 first=0080048008800c801080148018801c80>
+# D8 S5 C1:MDWV?: real=C1:MDWV STATE,ON,PSK,SRC,INT,KFRQ,100HZ,PLRT,POS,CARR,WVTP,ARB,FRQ,2048000HZ,AMP,4V,OFST,0V,PHSE,45 fake=C1:MDWV STATE,ON,AM,MDSP,SINE,SRC,INT,FRQ,100HZ,DEPTH,100,CARR,WVTP,ARB,FRQ,250000HZ,AMP,4V,OFST,0V,PHSE,45
+# D9 S5 C1:SWWV?: real=C1:SWWV STATE,ON,TIME,1S,STOP,2.0485e+06HZ,START,2.0475e+06HZ,TRSR,INT,TRMD,OFF,SWMD,LINE,DIR,UP,CARR,WVTP,ARB,FRQ,2048000HZ,AMP,4V,OFST,0V,PHSE,45 fake=C1:SWWV STATE,ON,TIME,1S,STOP,1500HZ,START,500HZ,TRSR,INT,TRMD,OFF,SWMD,LINE,DIR,UP,CARR,WVTP,ARB,FRQ,250000HZ,AMP,4V,OFST,0V,PHSE,45
+# D10 S5 C1:BTWV?: real=C1:BTWV STATE,ON,PRD,0.01S,STPS,45,TRSR,INT,TRMD,OFF,TIME,1,DLAY,5.4303e-07S,GATE_NCYC,NCYC,CARR,WVTP,ARB,FRQ,2048000HZ,AMP,4V,OFST,0V,PHSE,45 fake=C1:BTWV STATE,ON,PRD,0.01S,STPS,45,TRSR,INT,TRMD,OFF,TIME,1,DLAY,6.04035e-07S,GATE_NCYC,NCYC,CARR,WVTP,ARB,FRQ,250000HZ,AMP,4V,OFST,0V,PHSE,45

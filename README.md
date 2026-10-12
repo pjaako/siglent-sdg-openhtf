@@ -57,7 +57,9 @@ generator.get_sample_rate(1)              # {'MODE': 'TARB', 'VALUE': 4096000.0}
 
 `upload_arb(channel, name, samples, *, freq, ampl, ofst, phase, verify=True)` writes the wave (little-endian
 int16, 2 to 8 000 000 points) and, with `verify`, checks `STL? USER` and reads the data back. It does not select
-the wave; `apply_setup` with `ARWV` does. Names are 1 to 40 characters of `A-Za-z0-9_-`, without `.bin`.
+the wave; `apply_setup` with `ARWV` does. If the wave is already selected, a re-upload does not change the output
+until the wave is selected again: send `apply_setup` with `ARWV NAME` again after `upload_arb`. Names are 1 to 40
+characters of `A-Za-z0-9_-`, without `.bin`.
 `read_arb(name_or_index)` returns the header fields and the data bytes, `list_arbs()` the built-ins by index,
 `list_user_arbs()` the user wave names (use it as a set: the order is the generator's). The plug raises the VISA
 timeout to at least 30 s around uploads and read-backs. There is no delete: only the front panel removes a wave.
@@ -155,7 +157,7 @@ replays it in `tests/test_hardware_session_1.py`.
 
 SDG2042X, firmware 2.01.01.23R7, VXI-11. Transcripts `tests/data/hardware_arb_1.txt` (recon A) and
 `hardware_arb_2.txt` (recon B); the fake replays them in `tests/test_hardware_arb.py` (75 and 69 replies
-compared, one listed as not modelled).
+compared, one listed as not modelled), and the acceptance run `hardware_arb_3.txt` (F1 to F6 below).
 
 - A1. `*RST` leaves both channels at `C1:ARWV INDEX,0,NAME,StairUp`, `WVTP,SINE`, `SRATE MODE,DDS`. The selection is per channel.
 - A2. The index table of this unit is PG02's table shifted by two: `STL? BUILDIN` lists 197 entries `M0` to `M196`
@@ -171,7 +173,8 @@ compared, one listed as not modelled).
 - A7. `STL? USER` is `STL WVNM` when empty, else `STL WVNM,<name>,...`. A re-upload under a name replaces the wave.
   Names are listed without `.bin`.
 - A8. `WVDT? USER,<name>` answers `WVDT POS, /Local, WVNM, <name>, LENGTH, <n>B, TYPE, 6, WAVEDATA,` + `n` bytes +
-  `\n` as one message; built-ins: `WVDT? M<i>` with `POS, M<i>`, `LENGTH, 32768B` (16384 points). The bytes equal
+  `\n` as one message; built-ins: `WVDT? M<i>` with `POS, M<i>`, `LENGTH, 32768B` (16384 points) for M0, M2, M18 and
+  M196, but the built-ins differ in length: M193 (demo1_375pts) is `LENGTH, 750B`, 375 points (F2). The bytes equal
   the bytes sent, `0x0A` and `0x0D` included. 4 bytes (2 points) are accepted.
 - A9. The reply never carries the VXI-11 END flag and is re-sent whole on every further read, so `read_raw()`
   never returns. One low-level read returns exactly one message; the next query is normal.
@@ -186,7 +189,7 @@ compared, one listed as not modelled).
 - B1. A header-less upload (`C1:WVDT WVNM,<name>,WAVEDATA,`) is accepted; selecting it changes none of `FRQ`, `AMP`,
   `OFST`, `PHSE`. A header with only `FREQ,250` changes only `FRQ`. `LENGTH,128B` in the header changes nothing.
 - B2. An odd byte count corrupts the data (5 bytes read back as 6, the last one the terminator). The plug refuses it.
-- B3. Names are case-sensitive (`HTF_B1` is another file than `htf_b1`); `NAME,htf_b1.bin` selects `htf_b1`; 40
+- B3. Names are case-sensitive (`HTF_B1` is another file than `htf_b1`); `NAME,htf_b1.bin` does not select (F3); 40
   characters work; the quoted `"htf b5-x"` is stored as `"htfb5-x"`, so the plug refuses names outside `[A-Za-z0-9_-]`.
 - B4. Re-uploading the selected wave replaces its data and keeps the selection and the channel parameters.
 - B5. 200 kB take 107 ms, 2 MB 444 ms, 16 MB (8 000 000 points) 3.6 s; the next query answers after 2 to 4 ms.
@@ -195,6 +198,23 @@ compared, one listed as not modelled).
 - B7. The user store is shared by both channels (`C2:ARWV NAME,htf_b1`; `C2:WVDT` uploads into the same list). The
   order of `STL? USER` is neither alphabetical nor by upload time.
 - B8. `WVDT? USER,<unknown>` answers an empty message (no hang). `*RST` resets the selection to index 0 and keeps the user store.
+
+Acceptance run on the generator (`hardware_arb_3.txt`, a sequence the fake was not built from):
+
+- F1. `*RST` resets the TrueArb `VALUE` to 16384000 Sa/s (`MODE,TARB,VALUE,2000000`, `MODE,DDS`, `*RST`, `MODE,TARB`
+  reads `VALUE,16384000Sa/s`).
+- F2. The built-ins differ in length: `WVDT? M193` (demo1_375pts) is `LENGTH, 750B` (375 points); M0, M2, M18 and M196
+  are `32768B`. In TARB `FRQ = VALUE / points` uses that length. Not read: M195 (demo2_3kpts; the fake assumes 6000 B).
+- F3. `ARWV NAME,<name>.bin` is ignored (the earlier "works" of B3 was the wave already being selected). The reply of a
+  user wave still ends in `.bin`; the input must not.
+- F4. The sweep range follows a carrier frequency that changes through `SRATE MODE,TARB`, a `SRATE VALUE` or a wave
+  selection with a stored `FREQ`, also while the sweep is off: at a carrier of 2048000 Hz `SWWV STATE,ON` read
+  `STOP,2.0485e+06HZ,START,2.0475e+06HZ` (span 1000 Hz kept). A `BSWV FRQ` write with the sweep off leaves START and
+  STOP alone (modulation transcripts 2 and 3), so the fake distinguishes the two.
+- F5. Unmodelled: the modulation type survives `*RST` (`MDWV STATE,ON` came back as PSK from the 2026-10-05 session)
+  and the burst `DLAY` default depends on the carrier frequency (`5.4303e-07S` at 2048000 Hz).
+- F6. At the output a re-upload of the selected wave does not change the signal; a new `ARWV NAME` does (8-point ramp
+  and its re-uploaded inversion: identical captures; after re-selecting, the inverted ramp).
 
 ## Measured at the output: modulation, sweep, burst (2026-10-12)
 
@@ -309,7 +329,8 @@ A 50 ohm feed-through terminator at the scope input, generator CH1 to it over a 
   again on every read, so PyVISA's `read_raw()` collects gigabytes. The plug reads once, with the termination
   character off (the data contains `0x0A`). Do not read it any other way.
 - An odd number of data bytes is stored with the terminating newline as the last byte. The plug refuses odd counts.
-- Names: case-sensitive; `.bin` is added on read-back and accepted on input; a space in a quoted name is dropped.
+- Names: case-sensitive; `.bin` is added on read-back and NOT accepted on input (`ARWV NAME,x.bin` is ignored); a space
+  in a quoted name is dropped.
   Only `A-Za-z0-9_-`, 1 to 40 characters, are used by the plug (longer names are not measured).
 - PG02 defines no command to delete a user wave. Uploaded waves stay until removed at the front panel, so use fixed
   names and re-upload instead of creating new ones. A re-upload overwrites.
@@ -317,10 +338,13 @@ A 50 ohm feed-through terminator at the scope input, generator CH1 to it over a 
   features; TrueArb plays every point at the sample rate. Choose `SRATE MODE,TARB` when each point matters.
 - A wave's own `FREQ`, `AMPL`, `OFST`, `PHASE` are applied at selection and silently override what the channel had.
   A wave without them leaves the channel alone. A re-upload of the selected wave updates the stored data and not the
-  channel parameters; whether the output follows without a new selection is checked on the scope at acceptance.
+  channel parameters, and the output does not follow either: select the wave again with `ARWV NAME` after the
+  re-upload (measured with the scope, F6). `upload_arb` does not do it for you.
+- `*RST` resets the TrueArb sample rate to 16384000 Sa/s (F1). The built-in waves have different lengths: `M193` has
+  375 points, most have 16384 (F2).
 - Not modelled: the space removal in quoted names (the one listed gap in the replay), the order of `STL? USER`, the
-  content of the built-ins (the fake serves a ramp), and whether `*RST` keeps the TrueArb `VALUE` (the second
-  transcript shows 16384000 after `*RST`, but the unit may have been power cycled in between; the fake keeps it).
+  content of the built-ins (the fake serves a ramp), the length of M195 (hypothesis 6000 bytes), the modulation type
+  after `*RST` and the burst `DLAY` default (F5).
 - Still open: USB via pyvisa-py (reports from other projects say it is unreliable); the other two models.
 
 ## Files

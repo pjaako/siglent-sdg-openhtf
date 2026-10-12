@@ -175,7 +175,13 @@ _SRATE_HEADERS: Final = frozenset({"SRATE", "SAMPLERATE"})
 _STL_RE: Final = re.compile(r"^(?:STL|STORELIST)\?\s*(.*)$", re.IGNORECASE)
 _WVDT_QUERY_RE: Final = re.compile(r"^WVDT\?\s*(.*)$", re.IGNORECASE)
 _WVDT_WRITE_RE: Final = re.compile(rb"^(C[12]):WVDT\s+(.*)$", re.IGNORECASE | re.DOTALL)
-_ARB_POINTS_BUILTIN: Final = 16384  # every built-in has 16384 points (32768 bytes)   # measured, arb recon A (A8)
+# Built-in lengths in bytes, by index; every other built-in has 32768 bytes (16384 points).
+# measured, arb acceptance (F2): M0, M2, M18, M196 read 32768B, M193 reads 750B (375 points)
+_BUILTIN_BYTES_DEFAULT: Final = 32768
+_BUILTIN_BYTES: Final = {
+    193: 750,  # measured, arb acceptance (F2)
+    195: 6000,  # hypothesis: demo2_3kpts (3000 points) was not read
+}
 _SRATE_MAX: Final = 75e6  # VALUE,1E9 reads 75000000Sa/s   # measured, arb recon A (A11)
 _SRATE_DEFAULT: Final = 16384000.0  # TrueArb rate after *RST   # measured, arb recon A (A11)
 _WVDT_HEADER_KEYS: Final = frozenset({"WVNM", "LENGTH", "FREQ", "AMPL", "OFST", "PHASE"})  # PG02 §3.32
@@ -436,9 +442,8 @@ class FakeSdgResource:
         upper = cmd.upper()
         if upper == "*RST":  # PG02 §3.1.3: recall the default setup
             # The selection returns to index 0 and the mode to DDS, the user waves stay   # measured, arb recon B (B8)
-            # The TrueArb rate is kept   # hypothesis: transcript B starts with the value 16384000 after *RST, but the unit may have been power cycled
-            rates = {name: channel.srate_value for name, channel in self._channels.items()}
-            self._channels = {name: _Channel(srate_value=rates[name]) for name in _CHANNELS}
+            # The TrueArb rate returns to 16384000 Sa/s too   # measured, arb acceptance (F1)
+            self._channels = {name: _Channel() for name in _CHANNELS}
             return
         if upper == "*OPC":  # PG02 §3.1.2: sets the OPC bit, "no other effect"
             return
@@ -667,14 +672,15 @@ class FakeSdgResource:
     # ----------------------------------------------------------------------------------------------------
 
     def _arb_points(self, channel: _Channel) -> int:
-        """Points of the selected wave: 16384 for a built-in, half the bytes for a user wave.   # measured, arb recon A (A8)"""
+        """Points of the selected wave: half the bytes, for a built-in from the length table.   # measured, arb recon A (A8), arb acceptance (F2)"""
         if channel.arb_user is not None and channel.arb_user in self.user_arbs:
             return max(len(self.user_arbs[channel.arb_user][1]) // 2, 1)
-        return _ARB_POINTS_BUILTIN
+        return _BUILTIN_BYTES.get(channel.arb_index, _BUILTIN_BYTES_DEFAULT) // 2
 
     def _tarb_frq_from_rate(self, channel: _Channel) -> None:
         """In TrueArb, ``FRQ = VALUE / points``.   # measured, arb recon A and B (A11, B6)"""
         self._set_frq(channel, channel.srate_value / self._arb_points(channel))
+        self._sweep_follow_carrier(channel, always=True)  # also with the sweep off   # measured, arb acceptance (F4)
 
     def _tarb_rate_follows_frq(self, channel: _Channel) -> None:
         """A frequency written in TrueArb sets ``VALUE = FRQ * points``.   # measured, arb recon A (A11)"""
@@ -702,11 +708,10 @@ class FakeSdgResource:
                 if number is not None and number == int(number) and 0 <= int(number) < len(_BUILTIN_ARBS):
                     self._select_arb(channel, int(number), None)
             else:
-                # NAME selects a user wave only; a built-in name is ignored, an unknown name is ignored; a trailing
-                # ".bin" is accepted; names are case-sensitive   # measured, arb recon A and B (A3, B3)
-                name = value.removesuffix(".bin")
-                if name in self.user_arbs:
-                    self._select_arb(channel, channel.arb_index, name)
+                # NAME selects a user wave only; a built-in name is ignored, an unknown name is ignored; a name
+                # ending in ".bin" is ignored; names are case-sensitive   # measured, arb recon A and B (A3, B3), arb acceptance (F3)
+                if value in self.user_arbs and not value.endswith(".bin"):
+                    self._select_arb(channel, channel.arb_index, value)
 
     def _select_arb(self, channel: _Channel, index: int, user: str | None) -> None:
         channel.arb_index, channel.arb_user = index, user
@@ -723,6 +728,8 @@ class FakeSdgResource:
             for header_key, bswv_key in _WVDT_APPLIED:
                 if header_key in header:
                     self._set_bswv(channel, bswv_key, header[header_key])
+                    if bswv_key == "FRQ":  # the stored FREQ moves the sweep, also while it is off   # measured, arb acceptance (F4)
+                        self._sweep_follow_carrier(channel, always=True)
                     self._carrier_changed(channel)
 
     def _write_srate(self, channel: _Channel, tokens: list[str], cmd: str) -> None:
@@ -749,7 +756,6 @@ class FakeSdgResource:
                 if number is not None and number > 0:  # hypothesis: zero and negative values are ignored
                     channel.srate_value = min(number, _SRATE_MAX)  # clamp: measured, arb recon A (A11)
                     self._tarb_frq_from_rate(channel)
-                    self._sweep_follow_carrier(channel)
 
     def _wvdt_reply(self, argument: str, cmd: str) -> bytes:
         """The binary reply to ``WVDT? USER,<name>`` or ``WVDT? M<i>`` (PG02 §3.32).   # measured, arb recon A and B (A8, B8)"""
@@ -767,8 +773,9 @@ class FakeSdgResource:
         index = int(built.group(1))
         if index >= len(_BUILTIN_ARBS):
             return b""  # hypothesis: an index beyond the table answers an empty message like an unknown name
-        # hypothesis: only M2 and M18 were read; every built-in is a 16384-point ramp here
-        ramp = struct.pack("<16384h", *(-32768 + (i * 65535) // (_ARB_POINTS_BUILTIN - 1) for i in range(_ARB_POINTS_BUILTIN)))
+        # hypothesis: only M0, M2, M18, M193 and M196 were read; every built-in is a ramp of the tabulated length here
+        points = _BUILTIN_BYTES.get(index, _BUILTIN_BYTES_DEFAULT) // 2  # measured, arb acceptance (F2)
+        ramp = struct.pack(f"<{points}h", *(-32768 + (i * 65535) // (points - 1) for i in range(points)))
         head = f"WVDT POS, M{index}, WVNM, {_BUILTIN_ARBS[index]}, LENGTH, {len(ramp)}B, TYPE, 6, WAVEDATA,"
         return head.encode("ascii") + ramp + b"\n"
 
@@ -910,9 +917,13 @@ class FakeSdgResource:
                 else:  # PWM: no limit measured   # hypothesis until a hardware session
                     mod.devi = max(value, 0.0)
 
-    def _sweep_follow_carrier(self, channel: _Channel) -> None:
-        """The carrier frequency moves START and STOP, keeping the span.   # measured, modulation recon (README)"""
-        if channel.mod != "SWWV":
+    def _sweep_follow_carrier(self, channel: _Channel, *, always: bool = False) -> None:
+        """The carrier frequency moves START and STOP, keeping the span.   # measured, modulation recon (README)
+        With the sweep on for a ``BSWV FRQ``/``PERI`` write or a type change. With ``always`` also with the sweep off:
+        a carrier change from a TrueArb recompute or a wave selection   # measured, arb acceptance (F4).
+        The modulation transcripts show that a ``BSWV FRQ`` write with the sweep off leaves START and STOP alone
+        (hardware_modulation_2.txt line 338, hardware_modulation_3.txt line 167), so ``always`` is not used there."""
+        if channel.mod != "SWWV" and not always:
             return
         limit = self._limits.max_freq_hz.get(channel.wvtp, math.inf)
         # also respects the carrier type's maximum (A11)   # measured, modulation recon (README)

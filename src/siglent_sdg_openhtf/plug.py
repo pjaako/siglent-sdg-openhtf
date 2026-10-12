@@ -399,7 +399,9 @@ class SiglentSdgPlug(BasePlug):  # type: ignore[misc]  # OpenHTF is untyped
 
         The header parameters given are stored with the file and applied when the wave is selected; none given
         means the selection changes nothing. The upload does not select the wave: use ``apply_setup`` with
-        ``ARWV NAME``. With ``verify`` the name must appear in ``STL? USER`` and ``WVDT?`` must return the same
+        ``ARWV NAME``. A re-upload of the wave that is already selected does not change the output until the
+        wave is selected again with ``ARWV NAME`` (measured at the output, arb acceptance F6); the upload does not
+        do that by itself, because it may target a wave the test does not want selected. With ``verify`` the name must appear in ``STL? USER`` and ``WVDT?`` must return the same
         bytes, else ``SetupError``. The VISA timeout is raised to at least 30 s for the call.
         """
         data = encode_samples(samples)

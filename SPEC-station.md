@@ -79,6 +79,8 @@ so that this project does not depend on reading it.
   change, not only the block.
 - Do not read deep memory (RAW) while waveform recording is enabled: it returns a record that is none of
   the recorded frames. The scope plug refuses to.
+- Measured 2026-10-12: `set_state()` fails three times in a row while the scope is in STOP (after `:SING` and a
+  RAW read); the block loads at once after `:RUN`. Send `:RUN` before restoring, or let the scope plug do it.
 - `:DISP:DATA? PNG` returns a complete 1024 x 600 PNG in 0.2 to 0.3 s and changes no setting.
 
 ## Both plugs in one process (measured 2026-10-05, generator on LAN, scope on USB)

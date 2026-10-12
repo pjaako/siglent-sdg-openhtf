@@ -16,6 +16,10 @@ DATA = Path(__file__).parent / "data"
 # At most 8 entries in total.
 UNMODELLED: dict[str, dict[int, str]] = {
     "hardware_arb_1.txt": {},
+    "hardware_arb_3.txt": {
+        107: "F5: the modulation type survives *RST on the generator (PSK from an earlier session); the fake starts with AM",
+        113: "F5: the burst DLAY default depends on the carrier frequency (5.4303e-07S at 2048000 Hz); the fake does not model it",
+    },
     "hardware_arb_2.txt": {
         97: 'the generator stores the quoted name "htf b5-x" as "htfb5-x" (space dropped, quotes kept); the fake keeps the name as given',
     },
@@ -84,6 +88,12 @@ def test_transcript_b_replays_verbatim() -> None:
     compared = _replay("hardware_arb_2.txt")
     assert compared == _expected_replies("hardware_arb_2.txt")
     assert compared >= 69
+
+
+def test_transcript_c_replays_verbatim() -> None:
+    compared = _replay("hardware_arb_3.txt")
+    assert compared == _expected_replies("hardware_arb_3.txt")
+    assert compared >= 33
 
 
 def test_unmodelled_lines_are_replies_in_the_transcript() -> None:
