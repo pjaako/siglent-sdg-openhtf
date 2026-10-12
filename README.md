@@ -125,6 +125,25 @@ replays it in `tests/test_hardware_session_1.py`.
   `PRD` only with `TRSR,INT`, `TRMD` (`OFF`, `RISE`, `FALL`) not with `EXT`. GATE: `PRD,STPS,TRSR,GATE_NCYC,PLRT` (default `PLRT,NEG`).
   A PULSE carrier has no `STPS`. A NOISE carrier: `STATE,ON,PLRT,POS,CARR,WVTP,NOISE,STDEV,..,MEAN,..`.
 
+## Measured at the output: modulation, sweep, burst (2026-10-12)
+
+Generator CH1 to DHO814 CH1 over a BNC cable, 1 Mohm, `LOAD,HZ`, `AMP,2`; both instruments over LAN (VXI-11).
+Each case is one deep-memory capture of 100k points, analysed offline: zero crossings for frequency and cycle
+counts, peak-to-peak per carrier period for the envelope. The scope reads about 1.5 % high on Vpp.
+
+- AM (carrier SINE 10 kHz, `MDSP,SINE`, `FRQ,100`): the envelope is `AMP * (1 +- DEPTH/100) / 2` peak-to-peak.
+  `DEPTH,80` gave 1.83 / 0.21 Vpp (nominal 1.8 / 0.2, depth 79.2 %); `DEPTH,100` gave 2.03 / 0.03 Vpp. So `AMP`
+  is the envelope maximum at 100 % depth and the unmodulated carrier is `AMP/2`; at `DEPTH,120` the peak is
+  `1.1 * AMP`. Modulation frequency 100.0 Hz.
+- FM (carrier 10 kHz, `DEVI,2000`, `FRQ,100`): instantaneous frequency 7981 to 12017 Hz, carrier +- `DEVI` within 0.25 %.
+- Sweep `SWMD,LINE`, `DIR,UP`, `START,500`, `STOP,1500`, `TIME,0.1`: the frequency rises linearly (10 kHz/s) from
+  516 to 1491 Hz, measured per cycle, and jumps back every 100.0 ms. `SWMD,LOG`, `DIR,DOWN`, 2000 to 200 Hz:
+  1986 to 212 Hz with the log shape, period 99.9 ms. The carrier `FRQ` reads `(START+STOP)/2` in both modes.
+- Burst `GATE_NCYC,NCYC`, `TRSR,INT`, `TIME,5`, `PRD,0.01`, `STPS,0`, SINE 1 kHz: exactly 5 cycles per burst
+  (5.00 ms active), one burst every 10.00 ms, 0 V between bursts (34 mVpp noise). SQUARE 2 kHz, `TIME,12`,
+  `PRD,0.02`: 12 cycles, 6.0 ms active, 20.0 ms period; between bursts the output sits at the low level
+  (-1 V at `AMP,2`), not at 0 V.
+
 ## Things the manual does not tell you
 
 - `SYST:ERR?` (not in PG02) answered `+0, No error` and `*CLS` was accepted, also right after clamped writes.

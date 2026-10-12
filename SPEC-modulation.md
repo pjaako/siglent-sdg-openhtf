@@ -258,3 +258,18 @@ left 9 differing replies. The facts behind them:
   written while the burst was still in GATE mode (not echoed).
 - Not verified: the signal itself. Nothing was measured at the output for modulation, sweep or burst;
   only the generator's read-back. Channel 2 was exercised only in transcript 2 and one burst setup.
+
+## Addendum 4: the signal at the output (owner, 2026-10-12, task V2)
+
+Measured with the DHO814 on CH1 (1 Mohm, `LOAD,HZ`), both instruments over LAN, one 100k-point capture per case;
+details in README "Measured at the output: modulation, sweep, burst". Nothing here changes the fake: these are
+facts about the signal, not about replies.
+
+- AM envelope is `AMP * (1 +- DEPTH/100) / 2` Vpp: `AMP` is the envelope maximum at 100 % depth, the carrier is
+  `AMP/2`. A guard that computes the peak from `AMP/2 + |OFST|` is right for AM up to 100 % and 10 % low at 120 %.
+- FM swings the instantaneous frequency over carrier +- `DEVI` (7981..12017 Hz for 10 kHz +- 2 kHz).
+- Sweep: `START` to `STOP` in `TIME`, linear or log, repeating; `(START+STOP)/2` is what the carrier `FRQ` reads.
+- Burst NCYC: `TIME` cycles per burst, one burst per `PRD`; the output idles at the carrier's phase-0 level
+  (0 V for SINE, the low level for SQUARE).
+- The plug's validator refused `BSWV FRQ` next to a sweep (the sweep owns the carrier frequency); the measurement
+  setups give `START` and `STOP` only. Correct behaviour, kept.

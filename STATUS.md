@@ -3,27 +3,29 @@
 Handoff state for whoever picks this up next, human or agent. Keep it current; it is committed.
 Secrets (real IP, serial number, probe dumps) never go here; they live in the git-ignored `HANDOFF.md`.
 
-## Where we are (2026-10-05, end of day)
+## Where we are (2026-10-12)
 
-`main` holds everything; nothing relevant is left only on a local machine (see "What is not on GitHub").
-The day in short:
+`main` holds everything. Work now runs from an LXC container on the instruments' LAN; both instruments are
+reached over VXI-11 from there (the scope on LAN too, no USB passthrough needed). Done so far:
 
 - **v1 core** (`*IDN?`, `*RST`, `OUTP`, `BSWV`, `apply_setup` with read-back verification) works on the real
   SDG2042X, firmware 2.01.01.23R7, over VXI-11. Facts: `SPEC-hardware-1.md`, README.
 - **Station demo** (`examples/station_demo.py`): generator into a Rigol DHO814 in one OpenHTF test; passes on
-  both instruments and with `--fake`. The scope plug is the package `rigol-dho-openhtf`, extra `station`,
-  pinned in `[tool.uv.sources]`. Facts: `SPEC-station.md`.
-- **Modulation, sweep, burst** (`MDWV`, `SWWV`, `BTWV` groups): verified by read-back on the generator with
-  outputs off. The signal was not measured. Facts: `SPEC-modulation.md`.
+  both instruments (2026-10-05 over USB, 2026-10-12 over LAN) and with `--fake`. The scope plug is the package
+  `rigol-dho-openhtf`, extra `station`, pinned in `[tool.uv.sources]`. Facts: `SPEC-station.md`.
+- **Modulation, sweep, burst** (`MDWV`, `SWWV`, `BTWV` groups): verified by read-back on the generator
+  (2026-10-05) and **at the output with the scope (V2, 2026-10-12)**: AM depth, FM deviation, sweep range and
+  period, burst cycle count and period all match the settings. Facts: README "Measured at the output:
+  modulation, sweep, burst", `SPEC-modulation.md` addendum 4.
 - 652 tests, `mypy --strict` clean, CI green on `main`.
 
-## Start here tomorrow
+## Start here
 
 1. `uv sync --all-extras --dev && uv run pytest -q && uv run mypy`.
-2. Ask the human two things before any hardware work: the generator's address (it is not in git), and
-   whether a 50 ohm feed-through terminator is at hand (task V1 has been waiting for one since 2026-10-05;
-   remind him if it is not).
-3. Next task by default: **V2** (below). It needs the generator and the scope cabled CH1 to CH1.
+2. Addresses: the git-ignored `HANDOFF.md` has the generator's and the scope's address and the wiring when it
+   exists on this machine; otherwise ask the human. Identify each address with one `*IDN?` first.
+3. Next task by default: **V1** (below). It needs the human to fit the 50 ohm feed-through terminator at the
+   scope input and to remove it afterwards.
 4. Then `SPEC-arb.md` or `SPEC-counter-sync.md` (placeholders): recon on the generator first, then the
    spec, then a coder, then acceptance. The owner picks.
 
@@ -33,6 +35,11 @@ must replay verbatim; spec; coder against the fake only; then acceptance by the 
 command sequence sent to the fake and the instrument at once, every reply compared. Each such run found
 rules the recon had missed (10, 14 and 5 of them). Differences go back to the coder as numbered facts plus
 a new transcript. Last, the plug itself on the instrument: valid setups must verify, wrong ones must raise.
+
+How a signal check gets done (V2, 2026-10-12): a one-off script in `dumps/` opens both plugs, saves the scope's
+`get_state()` to disk first, applies one setup per case, takes a 100k-point deep-memory capture (`:SING`,
+`wait_stopped`, `read_waveform(1, mode='RAW')`), analyses it offline (zero crossings, per-period envelope) and
+ends with `tearDown()` on both. Keep the open-circuit peak under 5 V at the scope input.
 
 ## What is not on GitHub (by design)
 
@@ -57,26 +64,31 @@ a new transcript. Last, the plug itself on the instrument: valid setups must ver
 | STOP | First hardware session: `tools/probe.py` and `example_test.py` on the SDG2042X, from a local session on the LAN | done 2026-10-05 |
 | T6 | `SPEC-hardware-1.md`: hardware findings into the fake, validator, tolerances, README | done, accepted on hardware |
 | T7 | `SPEC-station.md` → `examples/station_demo.py` with rigol-dho-openhtf | done, accepted on both instruments 2026-10-05 |
-| V1 | Hardware check: signal levels with `LOAD,50` and a real 50 ohm load at the output (a feed-through terminator at the scope input). Expect the scope to read what `BSWV?` shows. The agent must ask the human to fit the terminator first, and to remove it afterwards. | open, needs the human |
+| V1 | Hardware check: signal levels with `LOAD,50` and a real 50 ohm load at the output (a feed-through terminator at the scope input). Expect the scope to read what `BSWV?` shows. The agent must ask the human to fit the terminator first, and to remove it afterwards. | **next**, needs the human to fit the terminator |
 | T8 | `SPEC-modulation.md`: `MDWV`, `SWWV`, `BTWV` as setup groups, fake, tests | done; read-back accepted on the generator 2026-10-05, signal not measured |
-| V2 | Hardware check: modulation, sweep and burst at the output with the scope (AM depth, sweep range, burst cycle count). Keep the open-circuit peak under 5 V at the scope input, save the scope state first, outputs off at the end. Start from `examples/station_demo.py`. | **next** |
+| V2 | Hardware check: modulation, sweep and burst at the output with the scope (AM depth, sweep range, burst cycle count). | done 2026-10-12, facts in README and `SPEC-modulation.md` addendum 4 |
 | later | SPEC-arb, SPEC-counter-sync | each needs a hardware session |
 
 ## Hardware access
 
-Hardware sessions run in a local Claude Code session on a machine on the generator's LAN (a cloud session
-cannot reach it: only HTTPS leaves the cloud container). The real address and serial are in the git-ignored
-`HANDOFF.md`; raw probe reports are in the git-ignored `dumps/`.
+Hardware sessions run in a Claude Code session on a machine on the instruments' LAN; since 2026-10-12 that is
+an LXC container with one NIC on that LAN (a cloud session cannot reach it: only HTTPS leaves the cloud
+container). The real addresses and serials are in the git-ignored `HANDOFF.md`; raw captures, one-off scripts
+and the saved scope states are in the git-ignored `dumps/`. The sibling projects under `/opt` pass USB devices
+or a second NIC into the container with kits in their `host/` directories; this project needs none of that
+while both instruments sit on the container's LAN.
 
 ```bash
 uv sync --all-extras --dev && uv run pytest -q && uv run mypy      # must be green before touching hardware
 uv run python tools/probe.py --resource 'TCPIP0::192.0.2.10::inst0::INSTR'   # real IP instead of 192.0.2.10
 uv run python example_test.py --resource 192.0.2.10
+uv run python examples/station_demo.py --generator 192.0.2.10 --scope 'TCPIP0::192.0.2.11::inst0::INSTR'
 ```
 
-Use VXI-11. Port 5025 (raw socket, PG02 §1.2.4) refused the connection on this unit. The probe starts with
-`*RST`, so the generator's previous settings are lost; it ends with both outputs off. Check the address
-with a single `*IDN?` first: other Siglent instruments on the same LAN answer SCPI too.
+Use VXI-11 for both. The generator refuses port 5025 (raw socket) on this unit; the scope offers VXI-11 and
+port 5555. The probe starts with `*RST`, so the generator's previous settings are lost; it ends with both
+outputs off. Check each address with a single `*IDN?` first: other Siglent and Rigol instruments on the same
+LAN answer SCPI too.
 
 ## Measured at the output (2026-10-05, generator CH1 -> BNC cable -> DHO814 CH1, 1 Mohm, no load)
 
@@ -95,5 +107,10 @@ fixed, the manager is no longer closed.
 - Is the raw socket on port 5025 switched off by a setting or missing in firmware 2.01.01.23R7?
 - The scope plug has two wishes open on its side (not blocking): a helper that writes a whole state to a
   file, and a `measure()` that hides the first `9.9E+37`.
+- `examples/station_demo.py` guards the scope input from `AMP` and `OFST` only. A step with `MDWV` AM at
+  `DEPTH` above 100 peaks higher (up to `1.1 * AMP`, README); the guard would have to know the groups before
+  such steps are added to the demo.
+- The V2 measurement script lives only in `dumps/` (it carries the addresses). A sanitized, tested version
+  under `examples/` would make the signal checks repeatable; not asked for yet.
 - Housekeeping for the human: the merged remote branches `station-demo`, `hardware-session-1`, `modulation`
   and `claude/modest-carson-349c1k` can be deleted.
