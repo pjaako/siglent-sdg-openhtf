@@ -19,16 +19,20 @@ reached over VXI-11 from there (the scope on LAN too, no USB passthrough needed)
   (2026-10-05) and **at the output with the scope (V2, 2026-10-12)**: AM depth, FM deviation, sweep range and
   period, burst cycle count and period all match the settings. Facts: README "Measured at the output:
   modulation, sweep, burst", `SPEC-modulation.md` addendum 4.
-- 652 tests, `mypy --strict` clean, CI green on `main`.
+- **Arbitrary waveforms** (`SPEC-arb.md`, 2026-10-12): `ARWV` and `SRATE` setup groups, `upload_arb`, `read_arb`,
+  `list_arbs`; two recons, the implementation against the fake, and an acceptance run on the generator with the
+  scope (six facts fed back, among them: `*RST` resets the TrueArb rate, built-ins differ in length, a re-upload of
+  the selected wave does not change the output until it is selected again). Three transcripts in `tests/data/`.
+- 798 tests, `mypy --strict` clean. Branch `v2-signal` holds today's work; CI runs on push.
 
 ## Start here
 
 1. `uv sync --all-extras --dev && uv run pytest -q && uv run mypy`.
 2. Addresses: the git-ignored `HANDOFF.md` has the generator's and the scope's address and the wiring when it
    exists on this machine; otherwise ask the human. Identify each address with one `*IDN?` first.
-3. Next: `SPEC-arb.md` or `SPEC-counter-sync.md` (placeholders): recon on the generator first, then the spec,
-   then a coder, then acceptance. The owner picks. Both need only the generator; the scope is useful for
-   acceptance (arb shape at the output, sync pulse).
+3. Next: `SPEC-counter-sync.md` (placeholder): recon on the generator first, then the spec, then a coder, then
+   acceptance (the sync pulse can be checked on the scope). Also open: the sweep re-centring question at the end of
+   `SPEC-arb.md`, one short experiment.
 
 How a feature gets done here (it worked three times on 2026-10-05): recon on the instrument with a script
 that logs every command and reply; the sanitized log becomes a transcript in `tests/data/` that the fake
@@ -36,6 +40,9 @@ must replay verbatim; spec; coder against the fake only; then acceptance by the 
 command sequence sent to the fake and the instrument at once, every reply compared. Each such run found
 rules the recon had missed (10, 14 and 5 of them). Differences go back to the coder as numbered facts plus
 a new transcript. Last, the plug itself on the instrument: valid setups must verify, wrong ones must raise.
+
+How the owner works since 2026-10-12: briefs to cheaper subagents for scripts, implementation, sanitizing and
+docs; the owner reviews, runs the hardware and writes the facts (AGENTS.md, Roles).
 
 How a signal check gets done (V2, 2026-10-12): a one-off script in `dumps/` opens both plugs, saves the scope's
 `get_state()` to disk first, applies one setup per case, takes a 100k-point deep-memory capture (`:SING`,
@@ -68,7 +75,8 @@ ends with `tearDown()` on both. Keep the open-circuit peak under 5 V at the scop
 | V1 | Hardware check: signal levels with `LOAD,50` and a real 50 ohm load at the output (a feed-through terminator at the scope input). | done 2026-10-12: the scope reads what `BSWV?` shows at `LOAD,50`; facts in README |
 | T8 | `SPEC-modulation.md`: `MDWV`, `SWWV`, `BTWV` as setup groups, fake, tests | done; read-back accepted on the generator 2026-10-05, signal not measured |
 | V2 | Hardware check: modulation, sweep and burst at the output with the scope (AM depth, sweep range, burst cycle count). | done 2026-10-12, facts in README and `SPEC-modulation.md` addendum 4 |
-| later | SPEC-arb, SPEC-counter-sync | each needs a hardware session |
+| T9 | `SPEC-arb.md`: arbitrary waveforms (`ARWV`, `WVDT`, `STL`, `SRATE`), recon A and B, implementation, acceptance with the scope | done 2026-10-12 |
+| later | SPEC-counter-sync | needs a hardware session |
 
 ## Hardware access
 
@@ -112,6 +120,9 @@ fixed, the manager is no longer closed.
 - `examples/station_demo.py` guards the scope input from `AMP` and `OFST` only. A step with `MDWV` AM at
   `DEPTH` above 100 peaks higher (up to `1.1 * AMP`, README); the guard would have to know the groups before
   such steps are added to the demo.
+- The generator keeps 11 user waves named `htf_*` from the arb sessions (16 MB `htf_big` among them); PG02 has no
+  delete command, the front panel does. Tests and examples reuse `htf_test`.
+- The scope drops a setup block while it is in STOP; `:RUN` first (SPEC-station). Handed to the scope project.
 - The V2 measurement script lives only in `dumps/` (it carries the addresses). A sanitized, tested version
   under `examples/` would make the signal checks repeatable; not asked for yet.
 - Housekeeping for the human: the merged remote branches `station-demo`, `hardware-session-1`, `modulation`
